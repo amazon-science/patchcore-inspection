@@ -1,0 +1,9 @@
+[tool.black]
+line-length = 88
+target-version = ['py37', 'py38', 'py39']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+force_single_line = true
+use_parentheses = true
