@@ -14,6 +14,7 @@ _For questions & feedback, please reach out to karsten.rh1@gmail.com!_
 
 ## Quick Guide
 
+First, clone this repository and set the `PYTHONPATH` environment variable with `env PYTHONPATH=src python bin/run_patchcore.py`.
 To train PatchCore on MVTec AD (as described below), run
 
 ```
