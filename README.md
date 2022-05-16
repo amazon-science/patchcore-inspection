@@ -142,7 +142,7 @@ allows you to log all training & test performances online to Weights-and-Biases 
 (<https://wandb.ai>). To use that, include the `--log_online` flag and provide your W&B key in
 `run_patchcore.py > --log_wandb_key`.
 
-Finally, due to the effectiveness and efficienty of PatchCore, we also incorporate the option to use
+Finally, due to the effectiveness and efficiency of PatchCore, we also incorporate the option to use
 an ensemble of backbone networks and network featuremaps. For this, provide the list of backbones to
 use (as listed in `/src/anomaly_detection/backbones.py`) with `-b <backbone` and, given their
 ordering, denote the layers to extract with `-le idx.<layer_name>`. An example with three different
@@ -174,7 +174,7 @@ in `dataset_flags`. Results will then be stored in `savefolder`. Example model &
 
 ```shell
 model_flags=('-p', 'path_to_mvtec_bottle_patchcore_model', '-p', 'path_to_mvtec_cable_patchcore_model', ...)
-dataset_flgas=('-d', 'bottle', '-d', 'cable', ...)
+dataset_flags=('-d', 'bottle', '-d', 'cable', ...)
 ```
 
 ### Expected performance of pretrained models
