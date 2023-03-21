@@ -18,6 +18,7 @@ class FaissNN(object):
         Args:
             on_gpu: If set true, nearest neighbour searches are done on GPU.
             num_workers: Number of workers to use with FAISS for similarity search.
+            device: a gpu id or gpu device for FAISS NN search.
         """
         faiss.omp_set_num_threads(num_workers)
         self.on_gpu = on_gpu
