@@ -294,7 +294,7 @@ def patch_core(
             backbone = patchcore.backbones.load(backbone_name)
             backbone.name, backbone.seed = backbone_name, backbone_seed
 
-            nn_method = patchcore.common.FaissNN(faiss_on_gpu, faiss_num_workers)
+            nn_method = patchcore.common.FaissNN(faiss_on_gpu, faiss_num_workers, device)
 
             patchcore_instance = patchcore.patchcore.PatchCore(device)
             patchcore_instance.load(

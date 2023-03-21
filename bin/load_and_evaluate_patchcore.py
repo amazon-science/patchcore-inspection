@@ -210,7 +210,7 @@ def patch_core_loader(patch_core_paths, faiss_on_gpu, faiss_num_workers):
                 [x for x in os.listdir(patch_core_path) if ".faiss" in x]
             )
             if n_patchcores == 1:
-                nn_method = patchcore.common.FaissNN(faiss_on_gpu, faiss_num_workers)
+                nn_method = patchcore.common.FaissNN(faiss_on_gpu, faiss_num_workers, device)
                 patchcore_instance = patchcore.patchcore.PatchCore(device)
                 patchcore_instance.load_from_path(
                     load_path=patch_core_path, device=device, nn_method=nn_method
@@ -219,7 +219,7 @@ def patch_core_loader(patch_core_paths, faiss_on_gpu, faiss_num_workers):
             else:
                 for i in range(n_patchcores):
                     nn_method = patchcore.common.FaissNN(
-                        faiss_on_gpu, faiss_num_workers
+                        faiss_on_gpu, faiss_num_workers, device
                     )
                     patchcore_instance = patchcore.patchcore.PatchCore(device)
                     patchcore_instance.load_from_path(
