@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 
 class FaissNN(object):
-    def __init__(self, on_gpu: bool = False, num_workers: int = 4) -> None:
+    def __init__(self, on_gpu: bool = False, num_workers: int = 4, device: Union[int,torch.device]=0) -> None:
         """FAISS Nearest neighbourhood search.
 
         Args:
@@ -22,6 +22,10 @@ class FaissNN(object):
         faiss.omp_set_num_threads(num_workers)
         self.on_gpu = on_gpu
         self.search_index = None
+        
+        if isinstance(device, torch.device):
+            device = int(torch.cuda.current_device())
+        self.device = device
 
     def _gpu_cloner_options(self):
         return faiss.GpuClonerOptions()
@@ -42,8 +46,10 @@ class FaissNN(object):
 
     def _create_index(self, dimension):
         if self.on_gpu:
+            gpu_config = faiss.GpuIndexFlatConfig()
+            gpu_config.device = self.device
             return faiss.GpuIndexFlatL2(
-                faiss.StandardGpuResources(), dimension, faiss.GpuIndexFlatConfig()
+                faiss.StandardGpuResources(), dimension, gpu_config
             )
         return faiss.IndexFlatL2(dimension)
 
