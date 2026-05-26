@@ -7,7 +7,6 @@ import argparse
 import gc
 import os
 import sys
-import pickle
 import time
 from datetime import datetime
 
@@ -31,7 +30,7 @@ import patchcore.sampler
 # ---------- 設定 ----------
 DATASET_PATH = os.path.join(SCRIPT_DIR, "..", "dataset")        # データセットのルートディレクトリ
 RESULTS_PATH = os.path.join(SCRIPT_DIR, "..", "results", "ContinualLearning")  # 結果・チェックポイントの保存先
-MEMORY_LIMIT_MB = 32_000    # プロセスメモリの上限 (MB)。超えたら停止
+MEMORY_LIMIT_MB = 48_000    # プロセスメモリの上限 (MB)。超えたら停止
 GPU = 0                     # 使用する GPU の番号
 SEED = 0                    # 乱数シード（画像シャッフル・モデル初期化の再現性）
 RESIZE = 256                # 画像のリサイズ後のサイズ (px)
@@ -231,20 +230,18 @@ def main():
             new_coreset = pc.featuresampler.run(new_features).astype(np.float32)
             print(f"  新規コアセット: {len(new_coreset)} ベクトル")
 
-            # 既存メモリバンクとマージ
+            # メモリバンク更新
+            #   A: 二重保持回避 — detection_features (numpy) は保持しない
+            #   B: 増分 faiss add — 旧バンクを取り出して concat → fit する代わりに
+            #      faiss index へ直接追加する（merge を作らない）
             if round_idx == 0:
-                merged = new_coreset
+                # 初回のみ fit() で index を構築（dim 確定 & 内部初期化）
+                pc.anomaly_scorer.fit(detection_features=[new_coreset])
+                pc.anomaly_scorer.detection_features = None  # A: numpy 側を即解放
             else:
-                # dtype 一致時はビューで済ませる（不要なコピーを避ける）
-                old = pc.anomaly_scorer.detection_features.astype(
-                    np.float32, copy=False
-                )
-                merged = np.concatenate([old, new_coreset], axis=0)
-                del old  # concat 直後に旧バンク参照を解放
-            print(f"  マージ後バンク: {len(merged)} ベクトル")
-
-            # アノマリースコアラーを再フィット
-            pc.anomaly_scorer.fit(detection_features=[merged])
+                pc.anomaly_scorer.nn_method.search_index.add(new_coreset)
+            bank_total = pc.anomaly_scorer.nn_method.search_index.ntotal
+            print(f"  バンク合計: {bank_total} ベクトル")
 
         except MemoryError:
             print(f"  !! MemoryError → Round {round_idx + 1} で停止")
@@ -260,7 +257,7 @@ def main():
         instance_auroc = metrics_result["auroc"]
 
         mem_after = get_memory_mb()
-        bank_size = len(pc.anomaly_scorer.detection_features)
+        bank_size = pc.anomaly_scorer.nn_method.search_index.ntotal
 
         result = {
             "round": round_idx + 1,
@@ -277,14 +274,10 @@ def main():
             f"memory={mem_after:.0f}MB"
         )
 
-        # チェックポイント保存
+        # チェックポイント保存（faiss index のみ。detection_features は廃止）
         ckpt_dir = os.path.join(run_dir, f"round_{round_idx+1:02d}")
         os.makedirs(ckpt_dir, exist_ok=True)
         pc.save_to_path(ckpt_dir)
-        # detection_features を別途保存（継続実行のため）
-        feat_file = os.path.join(ckpt_dir, "detection_features.pkl")
-        with open(feat_file, "wb") as fh:
-            pickle.dump(pc.anomaly_scorer.detection_features, fh, pickle.HIGHEST_PROTOCOL)
         print(f"  [ckpt] {ckpt_dir}")
 
         # CSV 追記
@@ -298,7 +291,7 @@ def main():
         save_plot(results, plot_path, N_PER_ROUND, PERCENTAGE)
 
         # ラウンド毎の中間配列を解放（メモリ累積防止）
-        del new_features_list, new_features, new_coreset, merged
+        del new_features_list, new_features, new_coreset
         del scores, _segs, labels_gt, _gt_masks, metrics_result
         gc.collect()
         if torch.cuda.is_available():
