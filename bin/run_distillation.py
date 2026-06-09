@@ -31,8 +31,9 @@ from patchcore.distill import extract_bank_vectors
 from patchcore.distill.scorers import CoresetScorer, FlatScorer, PQScorer
 from patchcore.distill.student import StudentScorer
 from patchcore.distill.train_student import train_student
+from patchcore.distill.prototype import PrototypeScorer, train_prototype
 
-ALL_METHODS = ["M0", "M1", "M2", "M3"]
+ALL_METHODS = ["M0", "M1", "M2", "M3", "M3L", "M3R", "M4"]
 
 
 def get_memory_mb() -> float:
@@ -109,9 +110,13 @@ def main():
     parser.add_argument("--pq_nbits", type=int, default=8)
     # M2
     parser.add_argument("--coreset_p", type=float, default=0.10)
-    # M3
+    # M3 / M3L / M3R
     parser.add_argument("--student_steps", type=int, default=3000)
     parser.add_argument("--student_batch", type=int, default=4096)
+    # M4（プロトタイプ）
+    parser.add_argument("--proto_p", type=float, default=0.01, help="中心初期化に使うコアセット率")
+    parser.add_argument("--proto_steps", type=int, default=2000)
+    parser.add_argument("--proto_temp", type=float, default=1.0, help="soft-min 温度（小さいほど min に近い）")
     parser.add_argument("--out", default=os.path.join(SCRIPT_DIR, "..", "results", "Distillation"))
     args = parser.parse_args()
 
@@ -153,11 +158,24 @@ def main():
 
     # --- スコアラ構築 ---
     scorers = []
-    flat_label_index = None  # M3 の教師ラベル付け用に流用
+    _label_index = {"idx": None}  # M3 系/M4 の教師ラベル付け用 IndexFlatL2 を遅延生成・共有
+
+    def ensure_label_index():
+        if _label_index["idx"] is None:
+            _label_index["idx"] = FlatScorer(bank, n_nn=n_nn, on_gpu=on_gpu).index
+        return _label_index["idx"]
+
+    # 生徒系の変種（M3=現行 / M3L=LayerNorm / M3R=LayerNorm+ランキング損失）
+    student_variants = {
+        "M3": dict(norm="batch", loss="huber", name="M3_student"),
+        "M3L": dict(norm="layer", loss="huber", name="M3L_student_ln"),
+        "M3R": dict(norm="layer", loss="ranking", name="M3R_student_rank"),
+    }
+
     for method in [m for m in ALL_METHODS if m in args.methods]:
         if method == "M0":
             s = FlatScorer(bank, n_nn=n_nn, on_gpu=on_gpu)
-            flat_label_index = s.index
+            _label_index["idx"] = s.index
             scorers.append(s)
         elif method == "M1":
             scorers.append(
@@ -166,19 +184,36 @@ def main():
         elif method == "M2":
             sampler = patchcore.sampler.ApproximateGreedyCoresetSampler(args.coreset_p, device)
             scorers.append(CoresetScorer(bank, sampler, n_nn=n_nn, on_gpu=on_gpu))
-        elif method == "M3":
-            if flat_label_index is None:
-                flat_label_index = FlatScorer(bank, n_nn=n_nn, on_gpu=on_gpu).index
-            print("生徒 MLP を蒸留学習中...")
+        elif method in student_variants:
+            cfg = student_variants[method]
+            print(f"生徒 MLP を蒸留学習中... ({method}: norm={cfg['norm']}, loss={cfg['loss']})")
             model = train_student(
                 bank,
-                flat_label_index,
+                ensure_label_index(),
                 device,
                 n_steps=args.student_steps,
                 batch=args.student_batch,
                 seed=args.seed,
+                norm=cfg["norm"],
+                loss=cfg["loss"],
             )
-            scorers.append(StudentScorer(model, device))
+            scorers.append(StudentScorer(model, device, name=cfg["name"]))
+        elif method == "M4":
+            print(f"プロトタイプ中心を初期化中... (coreset_p={args.proto_p})")
+            sampler = patchcore.sampler.ApproximateGreedyCoresetSampler(args.proto_p, device)
+            init_centers = np.ascontiguousarray(sampler.run(bank), dtype=np.float32)
+            print(f"プロトタイプ {len(init_centers)} 個を微調整中...")
+            model = train_prototype(
+                bank,
+                ensure_label_index(),
+                init_centers,
+                device,
+                temp=args.proto_temp,
+                n_steps=args.proto_steps,
+                batch=args.student_batch,
+                seed=args.seed,
+            )
+            scorers.append(PrototypeScorer(model, device))
 
     # --- 評価 ---
     rows = []
