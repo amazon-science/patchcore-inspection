@@ -13,15 +13,30 @@ from patchcore.distill import Scorer
 _EPS = 1e-6
 
 
+def _norm_layer(kind: str, dim: int):
+    """正規化層を返す。'batch'=BatchNorm1d / 'layer'=LayerNorm / 'none'=恒等。
+
+    BatchNorm は推論時に学習分布（合成データ）の running stats を使うため、分布外の
+    実異常パッチで信号が潰れる懸念がある。比較実験のため切替可能にする。
+    """
+    if kind == "batch":
+        return nn.BatchNorm1d(dim)
+    if kind == "layer":
+        return nn.LayerNorm(dim)
+    if kind == "none":
+        return nn.Identity()
+    raise ValueError(f"unknown norm: {kind}")
+
+
 class StudentMLP(nn.Module):
     """パッチ特徴量 [*, in_dim] → log(距離+eps) を回帰する MLP。"""
 
-    def __init__(self, in_dim: int = 1024, hidden=(512, 256)):
+    def __init__(self, in_dim: int = 1024, hidden=(512, 256), norm: str = "batch"):
         super().__init__()
         layers = []
         prev = in_dim
         for h in hidden:
-            layers += [nn.Linear(prev, h), nn.BatchNorm1d(h), nn.ReLU(inplace=True)]
+            layers += [nn.Linear(prev, h), _norm_layer(norm, h), nn.ReLU(inplace=True)]
             prev = h
         layers.append(nn.Linear(prev, 1))
         self.net = nn.Sequential(*layers)
@@ -39,8 +54,8 @@ def model_size_mb(model: nn.Module) -> float:
 class StudentScorer(Scorer):
     """学習済み生徒 MLP でパッチ毎スコア（= 予測距離）を算出する。"""
 
-    def __init__(self, model: StudentMLP, device, infer_batch: int = 65536):
-        self.name = "M3_student"
+    def __init__(self, model: StudentMLP, device, infer_batch: int = 65536, name: str = "M3_student"):
+        self.name = name
         self.model = model.to(device).eval()
         self.device = device
         self.infer_batch = infer_batch

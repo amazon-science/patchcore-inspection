@@ -9,8 +9,25 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from patchcore.distill.student import StudentMLP, _EPS
+
+
+def _ranking_loss(pred, target):
+    """ペアワイズ・ロジスティックランキング損失。
+
+    AUROC は max プーリング後の順位のみに依存するため、距離の絶対値ではなく
+    「正解距離が大きいパッチほど高スコア」という単調性を直接学習させる。
+    バッチ内をシャッフルしてペアを作り、目標が同値のペアは無視する。
+    """
+    perm = torch.randperm(pred.shape[0], device=pred.device)
+    sign = torch.sign(target - target[perm])
+    mask = sign != 0
+    if not mask.any():
+        return pred.sum() * 0.0
+    diff = (pred - pred[perm])[mask]
+    return F.softplus(-sign[mask] * diff).mean()
 
 
 def train_student(
@@ -25,6 +42,8 @@ def train_student(
     far_frac: float = 0.1,
     seed: int = 0,
     log_every: int = 300,
+    norm: str = "batch",
+    loss: str = "huber",
 ) -> StudentMLP:
     """教師バンクから距離回帰タスクを生成して生徒 MLP を学習し返す。
 
@@ -32,6 +51,8 @@ def train_student(
         bank: [N, D] 教師バンク特徴量（正常パッチ）。
         label_index: 正解距離を引く faiss index（教師バンクの IndexFlatL2、GPU 可）。
         device: torch デバイス。
+        norm: 正規化層の種類（'batch'/'layer'/'none'）。
+        loss: 損失関数（'huber'=距離回帰 / 'ranking'=ペアワイズ順位）。
     """
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
@@ -40,9 +61,10 @@ def train_student(
     feat_std = bank.std(axis=0, keepdims=True).astype(np.float32) + _EPS  # [1, D]
     feat_mean = bank.mean(axis=0, keepdims=True).astype(np.float32)
 
-    model = StudentMLP(dim, hidden).to(device)
+    model = StudentMLP(dim, hidden, norm=norm).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.SmoothL1Loss()  # Huber
+    huber = nn.SmoothL1Loss()
+    criterion = _ranking_loss if loss == "ranking" else huber
 
     model.train()
     for step in range(n_steps):
