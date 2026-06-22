@@ -2,23 +2,34 @@
 
 results/ContinualLearning/<timestamp>/results.csv を読み込み、
 コアセット率 P × ラウンド数 R の 3x3 グリッドとして比較図を出力する。
+
+出力（規約準拠）:
+    <out>/<YYYYMMDD_HHMMSS>/comparison_curves.png
+                          /comparison_summary.png
+                          /meta.json /log.txt
+    out 既定: results/ContinualLearning/comparison
+usage: PYTHONPATH=./src python scripts/compare_continual_learning.py [--base DIR] [--out DIR]
 """
+import argparse
 import csv
 import os
+import sys
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+)
+from patchcore.runlog import Tee, jst_timestamp, make_run_dir, write_meta
+
 plt.rcParams["font.family"] = "Noto Sans CJK JP"
 plt.rcParams["axes.unicode_minus"] = False
 
-BASE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "results",
-    "ContinualLearning",
-)
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_BASE = os.path.join(REPO_ROOT, "results", "ContinualLearning")
 
 # (timestamp): (percentage, n_rounds)。bank_size の増分から確定した対応表。
 RUNS = {
@@ -38,9 +49,9 @@ R_STYLE = {11: "-", 22: "--", 44: ":"}
 R_MARKER = {11: "o", 22: "s", 44: "^"}
 
 
-def load(ts):
+def load(base, ts):
     rows = []
-    with open(os.path.join(BASE, ts, "results.csv")) as f:
+    with open(os.path.join(base, ts, "results.csv")) as f:
         for r in csv.DictReader(f):
             rows.append(
                 {
@@ -58,9 +69,7 @@ def label(p, r):
     return f"P={p}, R={r}"
 
 
-def main():
-    data = {ts: load(ts) for ts in RUNS}
-
+def make_plots(data, run_dir):
     # ---- 図1: 4指標を進捗(データ割合)軸で重ねる ----
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle(
@@ -93,7 +102,7 @@ def main():
         ax.grid(True, alpha=0.3)
     axes[0, 0].legend(fontsize=7, ncol=3, loc="lower right")
     plt.tight_layout()
-    out1 = os.path.join(BASE, "comparison_curves.png")
+    out1 = os.path.join(run_dir, "comparison_curves.png")
     plt.savefig(out1, dpi=150)
     plt.close(fig)
     print(f"[saved] {out1}")
@@ -167,10 +176,37 @@ def main():
     ax.grid(True, alpha=0.3, axis="y")
 
     plt.tight_layout()
-    out2 = os.path.join(BASE, "comparison_summary.png")
+    out2 = os.path.join(run_dir, "comparison_summary.png")
     plt.savefig(out2, dpi=150)
     plt.close(fig)
     print(f"[saved] {out2}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="継続学習 P×R 実験群の比較プロット生成"
+    )
+    parser.add_argument(
+        "--base", default=DEFAULT_BASE, help="各 run の results.csv を含む親ディレクトリ"
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="出力先の親（既定: <base>/comparison）。実体は <out>/<timestamp>/",
+    )
+    args = parser.parse_args()
+
+    out_base = args.out or os.path.join(args.base, "comparison")
+    ts = jst_timestamp()
+    run_dir = make_run_dir(out_base, ts)
+
+    with Tee(run_dir):
+        print(f"[base] {args.base}")
+        print(f"[out]  {run_dir}")
+        data = {t: load(args.base, t) for t in RUNS}
+        make_plots(data, run_dir)
+    write_meta(run_dir, {"base": args.base, "runs": RUNS})
+    print(f"[meta] {os.path.join(run_dir, 'meta.json')}")
 
 
 if __name__ == "__main__":
