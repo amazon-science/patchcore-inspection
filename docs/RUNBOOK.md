@@ -190,6 +190,29 @@
   - `predictions/scores.csv` / `roc_teacher_vs_student.png` / `visualizations/*_panel.png` / `meta.json` / `log.txt`
 - **想定時間**：test 枚数依存（数十秒〜数分）
 
+### bin/run_final_distill_comparison.sh — 最終比較実験（2x2）の一括実行ハーネス
+
+- **目的**：マップ蒸留の最終比較 4 条件（**差分は `--pattern` と `--pseudo_dir` の 2 軸のみ**、他ハイパラ完全統一）を train → eval まで一括実行し、横断集計（`summary.csv` / `summary_auroc.png`）まで出力する。
+  - P1: `image_to_map` / 正常のみ、P2: `image_to_map` / 正常+疑似、P3: `feature_to_map` / 正常のみ、P4: `feature_to_map` / 正常+疑似
+- **前提**：`.venv`、precompute 済みの正常ターゲット（map+feature 両保持）・疑似ターゲット・Teacher フォルダ。GPU 2 枚（`GPU_A`=image系 / `GPU_B`=feature系を並行、各レーン内は直列）。**長時間ジョブのため手動実行のみ**。
+- **データセット**：正常/test=`dataset/anomaly_dataset`、疑似異常=公式 `dataset/inpainting_dataset/train/abnormal` 由来の precompute、Teacher=`results/ContinualLearning/.../round_21`。
+- **コマンド例**：
+  ```bash
+  # 既定値（ALLFEAT/PSEUDO/TEACHER/GPU 等）で実行
+  bash bin/run_final_distill_comparison.sh
+  # 環境変数で上書き（例：GPU・epoch・precompute 差し替え）
+  GPU_A=0 GPU_B=1 EPOCHS=30 \
+    ALLFEAT=results/distill_map/precomputed_allfeat/<ts> \
+    PSEUDO=results/distill_map/precomputed_pseudo_official/<ts>/pseudo \
+    TEACHER=results/ContinualLearning/.../round_21 \
+    bash bin/run_final_distill_comparison.sh
+  ```
+- **統一ハイパラ**：seed=42 / epochs=30(early_stopping patience=5) / batch=32 / lr=1e-4 / minmax / smooth_l1 / λmap=1.0 λscore=0.1 / weighted_map α=5.0 / pooling=max / fpn=decoder=128 / freeze_backbone=0（環境変数で一部上書き可）。
+- **出力先**：`results/distill_map/FINAL_comparison_<YYYYMMDD_HHMMSS>/`
+  - `summary.csv`（Teacher 込み 5 行：AUROC/AP/F1max/FPS/params/GPUメモリ）/ `summary_auroc.png` / `manifest.txt` / `orchestrator.log` / `<name>.log`
+  - 各 train/eval は従来どおり `results/distill_map/{FINAL_Px_*,eval_FINAL_Px_*}_<ts>/` に隔離出力。
+- **想定時間**：4 条件分の train（各 epoch×全枚数）＋ eval。GPU 2 レーン並行で数時間規模。
+
 ---
 
 ## 比較・可視化スクリプト
