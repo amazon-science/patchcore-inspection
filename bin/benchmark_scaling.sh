@@ -48,6 +48,21 @@ PERCENTAGES=(0.1 0.01)
 RESULT_BASE="$SCRIPT_DIR/results/Benchmark_Results/$TIMESTAMP"
 SUMMARY_FILE="$RESULT_BASE/summary.csv"
 mkdir -p "$RESULT_BASE"
+
+# 規約: 実行ログを log.txt に保存（R5）・再現メタ情報を meta.json に保存（R4）
+exec > >(tee -a "$RESULT_BASE/log.txt") 2>&1
+GIT_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+cat > "$RESULT_BASE/meta.json" <<META
+{
+  "command": "bash bin/benchmark_scaling.sh $*",
+  "git_commit": "$GIT_COMMIT",
+  "timestamp_jst": "$TIMESTAMP",
+  "gpu": "$GPU",
+  "image_counts": "${IMAGE_COUNTS[*]}",
+  "percentages": "${PERCENTAGES[*]}"
+}
+META
+
 echo "max_train_images,percentage,train_time,memory_mb" > "$SUMMARY_FILE"
 
 # TIMEOUT_SEC=14400  # 4時間
@@ -99,3 +114,9 @@ echo "結果フォルダ: $RESULT_BASE"
 echo "サマリー: $SUMMARY_FILE"
 echo "=============================="
 cat "$SUMMARY_FILE"
+
+# 規約: 実験結果は図を伴う（R3）。可視化を自動生成する。
+echo ""
+echo "[plot] 可視化を生成中..."
+$PYTHON scripts/visualize_benchmark.py --results_dir "$RESULT_BASE" || \
+  echo "  -> 可視化に失敗（Bench_*/results.csv が無い可能性）"
