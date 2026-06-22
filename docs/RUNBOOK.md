@@ -150,6 +150,19 @@
   - `checkpoints/{best,last}.ckpt` / `train_curve.png` / `train_log.csv` / `config.json` / `meta.json` / `log.txt`
 - **想定時間**：枚数・epoch 依存（train 全枚数×100ep は長時間）
 
+### scripts/generate_pseudo_anomalies.py — 疑似異常画像の生成（S3 用）
+
+- **目的**：正常画像に合成欠陥（scratch/spot/particle/contamination/brightness/blur/cutpaste）を載せた疑似異常画像とマスクを生成。後段で Teacher precompute → Student 蒸留学習（normal+pseudo）に使う。
+- **前提**：`PYTHONPATH=./src`。GPU 不要。`src/patchcore/distill_map/pseudo_anomaly.py` を利用（cv2 があれば高品質、無ければ numpy フォールバック）。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python scripts/generate_pseudo_anomalies.py \
+    --num 1000 --seed 0
+  ```
+- **出力先**：`results/distill_map/pseudo/<YYYYMMDD_HHMMSS>/`
+  - `anomaly/*.png` / `masks/*.png` / `pseudo_sanity.png` / `meta.json` / `log.txt`
+- **想定時間**：1,000 枚で数十秒
+
 ### bin/eval_distill_map.py — Student の評価（エントリポイント）
 
 - **目的**：学習済み Student を test set で推論し、image-level metrics・蒸留忠実度・効率指標・可視化・scores.csv/json を出力。`--teacher` 指定で Teacher 効率（memory bank search 込み）も計測し T0 vs S2 比較。
