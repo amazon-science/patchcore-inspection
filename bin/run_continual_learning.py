@@ -8,7 +8,6 @@ import gc
 import os
 import sys
 import time
-from datetime import datetime
 
 import matplotlib
 matplotlib.use("Agg")
@@ -25,6 +24,7 @@ import patchcore.common
 import patchcore.datasets.mvtec as mvtec
 import patchcore.metrics
 import patchcore.patchcore
+import patchcore.runlog
 import patchcore.sampler
 
 # ---------- 設定 ----------
@@ -117,9 +117,20 @@ def main():
     PERCENTAGE = args.percentage
     N_ROUNDS = args.n_rounds
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(RESULTS_PATH, timestamp)
-    os.makedirs(run_dir, exist_ok=True)
+    run_dir = patchcore.runlog.make_run_dir(RESULTS_PATH, patchcore.runlog.jst_timestamp())
+    patchcore.runlog.start_tee(run_dir)
+    patchcore.runlog.write_meta(
+        run_dir,
+        {
+            "n_per_round": N_PER_ROUND,
+            "percentage": PERCENTAGE,
+            "n_rounds": N_ROUNDS,
+            "seed": SEED,
+            "backbone": BACKBONE,
+            "layers": LAYERS,
+            "memory_limit_mb": MEMORY_LIMIT_MB,
+        },
+    )
 
     rng = np.random.default_rng(SEED)
     torch.manual_seed(SEED)
