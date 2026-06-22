@@ -142,6 +142,21 @@
   - `checkpoints/{best,last}.ckpt` / `train_curve.png` / `train_log.csv` / `config.json` / `meta.json` / `log.txt`
 - **想定時間**：枚数・epoch 依存（train 全枚数×100ep は長時間）
 
+### bin/eval_distill_map.py — Student の評価（エントリポイント）
+
+- **目的**：学習済み Student を test set で推論し、image-level metrics・蒸留忠実度・効率指標・可視化・scores.csv/json を出力。`--teacher` 指定で Teacher 効率（memory bank search 込み）も計測し T0 vs S2 比較。
+- **前提**：`PYTHONPATH=./src`、precompute 出力（`test/` を含む）、Student の `best.ckpt`、GPU。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python bin/eval_distill_map.py <precompute_dir> \
+    --checkpoint <run>/checkpoints/best.ckpt --name eval_S2 --gpu 0 \
+    --num_vis 8 --teacher <teacher_dir>
+  ```
+- **出力先**：`results/distill_map/<name>_<YYYYMMDD_HHMMSS>/`
+  - `metrics/{image_metrics,distillation_fidelity,efficiency_metrics}.json`
+  - `predictions/scores.csv` / `roc_teacher_vs_student.png` / `visualizations/*_panel.png` / `meta.json` / `log.txt`
+- **想定時間**：test 枚数依存（数十秒〜数分）
+
 ---
 
 ## 比較・可視化スクリプト

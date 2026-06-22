@@ -62,6 +62,7 @@ class TeacherTargetDataset(Dataset):
             ),
             "label": int(rec["label"]),
             "sample_id": sid,
+            "image_path": rec.get("image_path", sid),
         }
 
 
