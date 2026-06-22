@@ -52,8 +52,10 @@ def parse_args():
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--no_faiss_on_gpu", action="store_true", help="faiss を CPU で動かす")
     p.add_argument(
-        "--max_per_split", type=int, default=None, help="各 split の処理枚数上限（スモーク用）"
+        "--max_per_split", type=int, default=None, help="全 split 共通の処理枚数上限（スモーク用）"
     )
+    p.add_argument("--max_train", type=int, default=None, help="train の枚数上限（max_per_split より優先）")
+    p.add_argument("--max_test", type=int, default=None, help="test の枚数上限（max_per_split より優先）")
     p.add_argument(
         "--out",
         default=os.path.join(REPO_ROOT, "results", "distill_map", "precomputed"),
@@ -77,9 +79,12 @@ def _process_split(pc, device, args, split_name, split_dir):
         split=SPLIT_MAP[split_name],
         seed=args.seed,
     )
+    limit = {"train": args.max_train, "test": args.max_test}.get(split_name)
+    if limit is None:
+        limit = args.max_per_split
     n_total = len(dataset)
-    if args.max_per_split:
-        n_total = min(args.max_per_split, n_total)
+    if limit:
+        n_total = min(limit, n_total)
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
