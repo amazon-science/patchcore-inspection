@@ -6,6 +6,7 @@ precompute 済み Teacher target（``scripts/precompute_teacher_maps.py`` 出力
 """
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -16,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import patchcore.runlog as runlog
 from patchcore.datasets import mvtec
-from patchcore.distill_map import io_utils, student_fpn, trainer
+from patchcore.distill_map import feature_to_map, io_utils, student_fpn, trainer
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -25,6 +26,9 @@ def parse_args():
     p = argparse.ArgumentParser(description="Pattern B Student の蒸留学習")
     p.add_argument("targets_dir", help="precompute 出力フォルダ（train/ を含む）")
     p.add_argument("--name", default="S2_image_to_map", help="実験名（出力フォルダ接頭辞）")
+    p.add_argument("--pattern", default="image_to_map",
+                   choices=["image_to_map", "feature_to_map"],
+                   help="B=image_to_map / A=feature_to_map（precompute は --save_feature 必須）")
     p.add_argument("--gpu", type=int, default=0)
     p.add_argument("--seed", type=int, default=42)
     # dataset（画像の前処理は Teacher precompute と一致させる）
@@ -38,6 +42,8 @@ def parse_args():
     p.add_argument("--freeze_backbone", type=int, default=0)
     p.add_argument("--fpn_out_channels", type=int, default=128)
     p.add_argument("--decoder_channels", type=int, default=128)
+    p.add_argument("--reduce_channels", type=int, default=256,
+                   help="Pattern A: 1x1 縮約後のチャンネル数")
     p.add_argument("--output_activation", default="none", choices=["none", "sigmoid"])
     p.add_argument("--score_pooling", default="max", choices=["max", "topk_mean", "mean"])
     p.add_argument("--topk_ratio", type=float, default=0.01)
@@ -82,22 +88,41 @@ def main():
         imagesize=args.imagesize, split=mvtec.DatasetSplit.TRAIN, seed=args.seed,
     )
     train_targets_dir = os.path.join(args.targets_dir, "train")
-    dataset = io_utils.TeacherTargetDataset(base, train_targets_dir)
-    print(f"学習サンプル: {len(dataset)} 枚（targets={train_targets_dir}）")
+    load_feature = args.pattern == "feature_to_map"
+    dataset = io_utils.TeacherTargetDataset(base, train_targets_dir, load_feature=load_feature)
+    print(f"学習サンプル: {len(dataset)} 枚（targets={train_targets_dir}, pattern={args.pattern}）")
 
     score_stats = io_utils.fit_score_stats(dataset)
     normalizer = io_utils.TargetNormalizer(args.normalize, score_stats)
     print(f"normalize={args.normalize}  stats={score_stats}")
 
-    student_kwargs = dict(
-        pretrained=args.pretrained, freeze_backbone=args.freeze_backbone,
-        fpn_out_channels=args.fpn_out_channels, decoder_channels=args.decoder_channels,
+    common = dict(
         target_map_size=args.imagesize, output_activation=args.output_activation,
         score_pooling=args.score_pooling, topk_ratio=args.topk_ratio,
     )
+    if args.pattern == "feature_to_map":
+        feat = dataset[0]["teacher_feature"]  # [C,H',W']
+        c_in, h_feat = int(feat.shape[0]), int(feat.shape[1])
+        num_up = max(1, round(math.log2(args.imagesize / h_feat)))
+        student_kwargs = dict(
+            in_channels=c_in, reduce_channels=args.reduce_channels,
+            decoder_channels=args.decoder_channels, num_up=num_up, **common,
+        )
+        args.input_key = "teacher_feature"
+        student = feature_to_map.build_student(**student_kwargs)
+        n_params = feature_to_map.count_parameters(student)
+        print(f"Pattern A 入力特徴: C={c_in} H'={h_feat} → num_up={num_up}")
+    else:
+        student_kwargs = dict(
+            pretrained=args.pretrained, freeze_backbone=args.freeze_backbone,
+            fpn_out_channels=args.fpn_out_channels, decoder_channels=args.decoder_channels,
+            **common,
+        )
+        args.input_key = "image"
+        student = student_fpn.build_student(**student_kwargs)
+        n_params = student_fpn.count_parameters(student)
     args.student_kwargs = student_kwargs
-    student = student_fpn.build_student(**student_kwargs)
-    print(f"Student params(M): {student_fpn.count_parameters(student)/1e6:.3f}")
+    print(f"Student params(M): {n_params/1e6:.3f}")
 
     with open(os.path.join(run_dir, "config.json"), "w") as f:
         json.dump({k: v for k, v in vars(args).items()}, f, ensure_ascii=False, indent=2)

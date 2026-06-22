@@ -118,7 +118,11 @@
   # 本実行
   PYTHONPATH=./src .venv/bin/python scripts/precompute_teacher_maps.py <teacher_dir> \
     --gpu 0 --seed 0 --splits train test
+  # Pattern A 用（特徴マップ F_T も保存。.pt が大きくなる）
+  PYTHONPATH=./src .venv/bin/python scripts/precompute_teacher_maps.py <teacher_dir> \
+    --gpu 0 --seed 0 --splits train test --save_feature
   ```
+  - `--save_feature` で各 `.pt` に `teacher_feature_map`（[C,H',W'] float16, 例 [1024,28,28]）を追加。
 - **出力先**：`results/distill_map/precomputed/<YYYYMMDD_HHMMSS>/`
   - `<split>/<sample_id>.pt`（image_path / teacher_anomaly_map / teacher_anomaly_score / label / mask）
   - `stats.json`（スコア統計・map サイズ）/ `teacher_targets_sanity.png` / `meta.json` / `log.txt`
@@ -133,11 +137,15 @@
   # スモーク（少枚数・少 epoch）
   PYTHONPATH=./src .venv/bin/python bin/train_distill_map.py <precompute_dir> \
     --name SMOKE --gpu 0 --pretrained 0 --epochs 3 --batch_size 2 --val_ratio 0.25
-  # 本実行（S2: normal only）
+  # 本実行（S2: Pattern B = image→map, normal only）
   PYTHONPATH=./src .venv/bin/python bin/train_distill_map.py <precompute_dir> \
     --name S2_image_to_map --gpu 0 --epochs 100 --batch_size 32 \
     --lambda_map 1.0 --lambda_score 0.1 --normalize minmax
+  # S1: Pattern A = feature→map（precompute は --save_feature 必須）
+  PYTHONPATH=./src .venv/bin/python bin/train_distill_map.py <precompute_dir> \
+    --name S1_feature_to_map --pattern feature_to_map --gpu 0 --epochs 100 --batch_size 32
   ```
+  - `--pattern feature_to_map` は backbone なしで F_T→A_S を学習（軽量）。eval は checkpoint の pattern を自動判別。
 - **出力先**：`results/distill_map/<name>_<YYYYMMDD_HHMMSS>/`
   - `checkpoints/{best,last}.ckpt` / `train_curve.png` / `train_log.csv` / `config.json` / `meta.json` / `log.txt`
 - **想定時間**：枚数・epoch 依存（train 全枚数×100ep は長時間）

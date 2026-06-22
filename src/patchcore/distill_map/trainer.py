@@ -32,13 +32,14 @@ def split_train_val(dataset, val_ratio: float, seed: int):
     return Subset(dataset, train_idx), Subset(dataset, val_idx)
 
 
-def _run_epoch(student, loader, crit, normalizer, device, optimizer=None, scaler=None):
+def _run_epoch(student, loader, crit, normalizer, device, optimizer=None, scaler=None,
+               input_key="image"):
     train = optimizer is not None
     student.train(train)
     totals = {"loss": 0.0, "map": 0.0, "score": 0.0}
     n = 0
     for batch in loader:
-        images = batch["image"].to(device, non_blocking=True)
+        images = batch[input_key].to(device, non_blocking=True)
         a_t = normalizer.apply(batch["teacher_map"].to(device, non_blocking=True))
         s_t = normalizer.apply(batch["teacher_score"].to(device, non_blocking=True))
         bs = images.shape[0]
@@ -94,6 +95,7 @@ def train_student(student, full_dataset, normalizer, device, args, run_dir):
     )
     print(f"train={len(train_set)}  val={len(val_set) if val_set else 0}")
 
+    input_key = getattr(args, "input_key", "image")
     student.to(device)
     crit = DistillLoss(
         map_loss_kind=args.map_loss,
@@ -122,12 +124,14 @@ def train_student(student, full_dataset, normalizer, device, args, run_dir):
             "student_state_dict": student.state_dict(),
             "normalizer": normalizer.to_dict(),
             "student_kwargs": getattr(args, "student_kwargs", {}),
+            "pattern": getattr(args, "pattern", "image_to_map"),
         }
 
     for epoch in range(1, args.epochs + 1):
         tr = _run_epoch(student, train_loader, crit, normalizer, device,
-                        optimizer=optimizer, scaler=scaler)
-        va = (_run_epoch(student, val_loader, crit, normalizer, device)
+                        optimizer=optimizer, scaler=scaler, input_key=input_key)
+        va = (_run_epoch(student, val_loader, crit, normalizer, device,
+                         input_key=input_key)
               if val_loader is not None else None)
         scheduler.step()
         row = {

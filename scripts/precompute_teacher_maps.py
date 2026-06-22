@@ -57,6 +57,10 @@ def parse_args():
     p.add_argument("--max_train", type=int, default=None, help="train の枚数上限（max_per_split より優先）")
     p.add_argument("--max_test", type=int, default=None, help="test の枚数上限（max_per_split より優先）")
     p.add_argument(
+        "--save_feature", action="store_true",
+        help="Pattern A 用に Teacher 特徴マップ F_T([C,H',W'] float16) も保存する",
+    )
+    p.add_argument(
         "--out",
         default=os.path.join(REPO_ROOT, "results", "distill_map", "precomputed"),
         help="出力親ディレクトリ（この下に timestamp フォルダを作る）",
@@ -67,6 +71,27 @@ def parse_args():
         help="サニティ図の転記先（ロードマップ用）。空文字で無効化",
     )
     return p.parse_args()
+
+
+def _predict_with_features(pc, images):
+    """pc._predict を再現しつつ、特徴格子 F_T([B,C,H',W']) も返す（backbone 1回）。"""
+    images = images.to(torch.float).to(pc.device)
+    _ = pc.forward_modules.eval()
+    batchsize = images.shape[0]
+    with torch.no_grad():
+        features, patch_shapes = pc._embed(images, provide_patch_shapes=True)
+        features = np.asarray(features)  # [B*P, C]
+        patch_scores = image_scores = pc.anomaly_scorer.predict([features])[0]
+        image_scores = pc.patch_maker.unpatch_scores(image_scores, batchsize=batchsize)
+        image_scores = image_scores.reshape(*image_scores.shape[:2], -1)
+        image_scores = pc.patch_maker.score(image_scores)
+        patch_scores = pc.patch_maker.unpatch_scores(patch_scores, batchsize=batchsize)
+        scales = patch_shapes[0]
+        patch_scores = patch_scores.reshape(batchsize, scales[0], scales[1])
+        masks = pc.anomaly_segmentor.convert_to_segmentation(patch_scores)
+    c = features.shape[-1]
+    feat_grid = features.reshape(batchsize, scales[0], scales[1], c).transpose(0, 3, 1, 2)
+    return list(image_scores), list(masks), feat_grid  # feat_grid: [B,C,H',W']
 
 
 def _process_split(pc, device, args, split_name, split_dir):
@@ -94,6 +119,7 @@ def _process_split(pc, device, args, split_name, split_dir):
 
     scores_all, labels_all = [], []
     map_h = map_w = None
+    feat_shape = None
     done = 0
     for batch in loader:
         if done >= n_total:
@@ -103,7 +129,11 @@ def _process_split(pc, device, args, split_name, split_dir):
         is_anomaly = batch["is_anomaly"].numpy().tolist()
         masks_gt = batch.get("mask")
 
-        scores, amaps = pc._predict(images)
+        if args.save_feature:
+            scores, amaps, feat_grid = _predict_with_features(pc, images)
+        else:
+            scores, amaps = pc._predict(images)
+            feat_grid = None
         for i in range(len(scores)):
             if done >= n_total:
                 break
@@ -117,6 +147,10 @@ def _process_split(pc, device, args, split_name, split_dir):
                 "teacher_anomaly_score": float(scores[i]),
                 "label": int(is_anomaly[i]),
             }
+            if feat_grid is not None:
+                record["teacher_feature_map"] = torch.from_numpy(feat_grid[i]).half()
+                if feat_shape is None:
+                    feat_shape = list(feat_grid[i].shape)
             if masks_gt is not None and split_name == "test":
                 record["mask"] = masks_gt[i].float().squeeze()
             torch.save(record, os.path.join(split_dir, sid + ".pt"))
@@ -130,6 +164,7 @@ def _process_split(pc, device, args, split_name, split_dir):
         "count": int(len(scores_all)),
         "n_anomaly": int(sum(labels_all)),
         "map_size": [int(map_h), int(map_w)] if map_h else None,
+        "feature_shape": feat_shape,
         "score_mean": float(scores_arr.mean()) if len(scores_arr) else None,
         "score_std": float(scores_arr.std()) if len(scores_arr) else None,
         "score_min": float(scores_arr.min()) if len(scores_arr) else None,

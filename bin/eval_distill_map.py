@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import patchcore.metrics as pmetrics
 import patchcore.runlog as runlog
 from patchcore.datasets import mvtec
-from patchcore.distill_map import io_utils, student_fpn, visualize
+from patchcore.distill_map import feature_to_map, io_utils, student_fpn, visualize
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -53,18 +53,20 @@ def _anomaly_type(image_path: str) -> str:
 
 def _load_student(checkpoint, device):
     ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
-    student = student_fpn.build_student(**ckpt["student_kwargs"])
+    pattern = ckpt.get("pattern", "image_to_map")
+    module = feature_to_map if pattern == "feature_to_map" else student_fpn
+    student = module.build_student(**ckpt["student_kwargs"])
     student.load_state_dict(ckpt["student_state_dict"])
     student.to(device).eval()
     normalizer = io_utils.TargetNormalizer(
         ckpt["normalizer"]["mode"], ckpt["normalizer"]["stats"]
     )
-    return student, normalizer
+    return student, normalizer, pattern, module
 
 
 @torch.no_grad()
-def _student_efficiency(student, device, imagesize, n=50):
-    x = torch.randn(1, 3, imagesize, imagesize, device=device)
+def _student_efficiency(student, device, sample_input, module, n=50):
+    x = sample_input.to(device)
     for _ in range(5):  # warmup
         student(x)
     if device.type == "cuda":
@@ -81,8 +83,8 @@ def _student_efficiency(student, device, imagesize, n=50):
     return {
         "inference_time_ms": dt * 1000,
         "fps": 1.0 / dt,
-        "parameters": int(student_fpn.count_parameters(student)),
-        "model_size_mb": student_fpn.model_size_mb(student),
+        "parameters": int(module.count_parameters(student)),
+        "model_size_mb": module.model_size_mb(student),
         "gpu_memory_mb": mem,
     }
 
@@ -125,14 +127,18 @@ def main():
     runlog.start_tee(run_dir)
     print(f"出力先: {run_dir}\nDevice: {device}")
 
-    student, normalizer = _load_student(args.checkpoint, device)
-    print(f"Student ロード: {args.checkpoint}  normalize={normalizer.mode}")
+    student, normalizer, pattern, module = _load_student(args.checkpoint, device)
+    input_key = "teacher_feature" if pattern == "feature_to_map" else "image"
+    print(f"Student ロード: {args.checkpoint}  pattern={pattern}  normalize={normalizer.mode}")
 
     base = mvtec.MVTecDataset(
         args.dataset_path, classname=args.classname, resize=args.resize,
         imagesize=args.imagesize, split=mvtec.DatasetSplit.TEST, seed=args.seed,
     )
-    dataset = io_utils.TeacherTargetDataset(base, os.path.join(args.targets_dir, "test"))
+    dataset = io_utils.TeacherTargetDataset(
+        base, os.path.join(args.targets_dir, "test"),
+        load_feature=(pattern == "feature_to_map"),
+    )
     if args.max_test:
         dataset = Subset(dataset, list(range(min(args.max_test, len(dataset)))))
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
@@ -146,9 +152,10 @@ def main():
     with torch.no_grad():
         for batch in loader:
             images = batch["image"].to(device)
+            model_in = batch[input_key].to(device)
             a_t_raw = batch["teacher_map"].to(device)          # [B,1,H,W]
             a_t = normalizer.apply(a_t_raw)
-            a_s = student(images)
+            a_s = student(model_in)
             s_s = student.score(a_s)
             for i in range(images.shape[0]):
                 se = float(((a_s[i] - a_t[i]) ** 2).mean())
@@ -203,7 +210,11 @@ def main():
         "score_spearman": float(spearmanr(s_scores, t_scores)[0]),
     }
 
-    efficiency = {"student": _student_efficiency(student, device, args.imagesize)}
+    if pattern == "feature_to_map":
+        sample_input = dataset[0]["teacher_feature"].unsqueeze(0)
+    else:
+        sample_input = torch.randn(1, 3, args.imagesize, args.imagesize)
+    efficiency = {"student": _student_efficiency(student, device, sample_input, module)}
     if args.teacher:
         print("Teacher 効率を計測中...")
         efficiency["teacher"] = _teacher_efficiency(args.teacher, device, args, len(rows))

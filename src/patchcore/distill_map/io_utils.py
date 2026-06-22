@@ -27,9 +27,10 @@ class TeacherTargetDataset(Dataset):
     対応する ``.pt`` が存在する画像のみを対象にする（スモークの部分 precompute に対応）。
     """
 
-    def __init__(self, base_dataset, targets_split_dir: str):
+    def __init__(self, base_dataset, targets_split_dir: str, load_feature: bool = False):
         self.base = base_dataset
         self.dir = targets_split_dir
+        self.load_feature = load_feature
         avail = {
             f[:-3] for f in os.listdir(targets_split_dir) if f.endswith(".pt")
         }
@@ -54,7 +55,7 @@ class TeacherTargetDataset(Dataset):
         amap = rec["teacher_anomaly_map"]
         if amap.dim() == 2:
             amap = amap.unsqueeze(0)  # [1,H,W]
-        return {
+        out = {
             "image": item["image"],
             "teacher_map": amap.float(),
             "teacher_score": torch.tensor(
@@ -64,6 +65,13 @@ class TeacherTargetDataset(Dataset):
             "sample_id": sid,
             "image_path": rec.get("image_path", sid),
         }
+        if self.load_feature:
+            if "teacher_feature_map" not in rec:
+                raise KeyError(
+                    f"teacher_feature_map がありません（precompute を --save_feature で実行）: {sid}"
+                )
+            out["teacher_feature"] = rec["teacher_feature_map"].float()
+        return out
 
 
 def fit_score_stats(dataset: TeacherTargetDataset) -> dict:
