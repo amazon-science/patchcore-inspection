@@ -26,7 +26,8 @@
   bash bin/run_patchcore_venv.sh
   # または直接実行は CLAUDE.md「パイプライン全体の流れ」を参照
   ```
-- **出力先**：`./results/<log_project>/<log_group>/`（`results.csv`・モデル）
+- **出力先**：`./results/<log_project>/<log_group>/`（`iterate` で `_0/_1` を付与し上書き防止）
+  - `results.csv` / `results_summary.png`（指標サマリ図・自動生成）/ `meta.json` / `log.txt`
 - **想定時間**：データ規模・GPU 依存（長時間ジョブ。自動実行禁止）
 
 ### bin/load_and_evaluate_patchcore.py — 学習済みモデルの評価
@@ -40,8 +41,34 @@
     patch_core_loader -p <model_path> --faiss_on_gpu \
     dataset -d anomaly_dataset --resize 256 --imagesize 224 mvtec ./dataset
   ```
-- **出力先**：`<save_folder>/results.csv`
+- **出力先**：`<save_folder>/`（`results.csv` / `results_summary.png` / `meta.json` / `log.txt`）
 - **想定時間**：評価データ規模依存（長時間ジョブ。自動実行禁止）
+
+### bin/run_continual_learning.py — 継続学習実験
+
+- **目的**：各ラウンドで一部画像を学習しコアセットをマージしていく継続学習を評価する。
+- **前提**：`PYTHONPATH=./src`、GPU、`./dataset`。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python bin/run_continual_learning.py \
+    --n_per_round 2000 --percentage 0.10 --n_rounds 10
+  ```
+- **出力先**：`results/ContinualLearning/<YYYYMMDD_HHMMSS>/`
+  - `results.csv` / `progress.png` / `round_NN/`（チェックポイント）/ `meta.json` / `log.txt`
+- **想定時間**：ラウンド数・枚数依存（長時間ジョブ。自動実行禁止）
+
+### bin/benchmark_scaling.sh — スケーリングベンチマーク
+
+- **目的**：画像枚数 × サブサンプリング率を振って train_time / memory_mb を計測する（run_patchcore のラッパ）。
+- **前提**：Python 3.10 実バイナリ、`./dataset`。
+- **コマンド例**：
+  ```bash
+  bash bin/benchmark_scaling.sh [GPU番号]
+  ```
+- **出力先**：`results/Benchmark_Results/<YYYYMMDD_HHMMSS>/`
+  - `Bench_*/`（各条件、`results.csv`＋`meta.json`＋`log.txt`）/ `summary.csv` / `meta.json` / `log.txt`
+  - `viz/<timestamp>/`（完了時に visualize_benchmark.py が自動生成）
+- **想定時間**：条件数依存（全条件で 30〜60 分程度。長時間ジョブ。自動実行禁止）
 
 ---
 
@@ -133,7 +160,7 @@
 ### src/patchcore/runlog.py — 出力規約準拠の共通ヘルパ（ライブラリ）
 
 - **位置づけ**：単体実行しない**ライブラリモジュール**。実験スクリプトが import して使う。
-- **API**：`jst_timestamp()` / `make_run_dir(base)` / `write_meta(run_dir, extra)` / `Tee(run_dir)`。
+- **API**：`jst_timestamp()` / `make_run_dir(base)` / `write_meta(run_dir, extra)` / `Tee(run_dir)`（with 包囲用）/ `start_tee(run_dir)`（click 等の非包囲用、返り値を logging ハンドラに渡せば LOGGER も集約）。
 - **用途**：新規スクリプトを規約（タイムスタンプ出力・`meta.json`・`log.txt`）に準拠させる際の共通基盤。
 
 ---
