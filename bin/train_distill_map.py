@@ -12,6 +12,7 @@ import sys
 
 import numpy as np
 import torch
+from torch.utils.data import ConcatDataset
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
@@ -25,6 +26,8 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def parse_args():
     p = argparse.ArgumentParser(description="Pattern B Student の蒸留学習")
     p.add_argument("targets_dir", help="precompute 出力フォルダ（train/ を含む）")
+    p.add_argument("--pseudo_dir", default=None,
+                   help="(S3) 疑似異常 precompute の split フォルダ（例 <run>/pseudo）。normal と結合学習")
     p.add_argument("--name", default="S2_image_to_map", help="実験名（出力フォルダ接頭辞）")
     p.add_argument("--pattern", default="image_to_map",
                    choices=["image_to_map", "feature_to_map"],
@@ -89,10 +92,22 @@ def main():
     )
     train_targets_dir = os.path.join(args.targets_dir, "train")
     load_feature = args.pattern == "feature_to_map"
-    dataset = io_utils.TeacherTargetDataset(base, train_targets_dir, load_feature=load_feature)
-    print(f"学習サンプル: {len(dataset)} 枚（targets={train_targets_dir}, pattern={args.pattern}）")
+    normal_ds = io_utils.TeacherTargetDataset(base, train_targets_dir, load_feature=load_feature)
+    stat_sources = [normal_ds]
+    if args.pseudo_dir:
+        pseudo_ds = io_utils.DirectImageTargetDataset(
+            args.pseudo_dir, resize=args.resize, imagesize=args.imagesize,
+            load_feature=load_feature,
+        )
+        dataset = ConcatDataset([normal_ds, pseudo_ds])
+        stat_sources.append(pseudo_ds)
+        print(f"学習サンプル: normal {len(normal_ds)} + pseudo {len(pseudo_ds)} = {len(dataset)} 枚"
+              f"（pattern={args.pattern}）")
+    else:
+        dataset = normal_ds
+        print(f"学習サンプル: {len(dataset)} 枚（targets={train_targets_dir}, pattern={args.pattern}）")
 
-    score_stats = io_utils.fit_score_stats(dataset)
+    score_stats = io_utils.fit_score_stats(stat_sources)
     normalizer = io_utils.TargetNormalizer(args.normalize, score_stats)
     print(f"normalize={args.normalize}  stats={score_stats}")
 

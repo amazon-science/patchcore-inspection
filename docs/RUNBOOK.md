@@ -123,6 +123,12 @@
     --gpu 0 --seed 0 --splits train test --save_feature
   ```
   - `--save_feature` で各 `.pt` に `teacher_feature_map`（[C,H',W'] float16, 例 [1024,28,28]）を追加。
+  ```bash
+  # 疑似異常画像フォルダに対して Teacher 出力を precompute（S3 用）
+  PYTHONPATH=./src .venv/bin/python scripts/precompute_teacher_maps.py <teacher_dir> \
+    --gpu 0 --image_dir results/distill_map/pseudo/<ts>/anomaly --image_dir_split pseudo
+  ```
+  - `--image_dir` は任意画像フォルダを処理し `<run>/pseudo/*.pt` に保存（image_path はフルパス）。
 - **出力先**：`results/distill_map/precomputed/<YYYYMMDD_HHMMSS>/`
   - `<split>/<sample_id>.pt`（image_path / teacher_anomaly_map / teacher_anomaly_score / label / mask）
   - `stats.json`（スコア統計・map サイズ）/ `teacher_targets_sanity.png` / `meta.json` / `log.txt`
@@ -146,6 +152,12 @@
     --name S1_feature_to_map --pattern feature_to_map --gpu 0 --epochs 100 --batch_size 32
   ```
   - `--pattern feature_to_map` は backbone なしで F_T→A_S を学習（軽量）。eval は checkpoint の pattern を自動判別。
+  ```bash
+  # S3: normal + pseudo anomaly 結合学習（--pseudo_dir に pseudo precompute の split を渡す）
+  PYTHONPATH=./src .venv/bin/python bin/train_distill_map.py <normal_precompute_dir> \
+    --pseudo_dir <pseudo_precompute_dir>/pseudo --name S3_image_to_map --gpu 0 --epochs 30
+  ```
+  - `--pseudo_dir` 指定時は normal(TeacherTargetDataset) と pseudo(DirectImageTargetDataset) を ConcatDataset で結合し、正規化統計は両者から算出。
 - **出力先**：`results/distill_map/<name>_<YYYYMMDD_HHMMSS>/`
   - `checkpoints/{best,last}.ckpt` / `train_curve.png` / `train_log.csv` / `config.json` / `meta.json` / `log.txt`
 - **想定時間**：枚数・epoch 依存（train 全枚数×100ep は長時間）

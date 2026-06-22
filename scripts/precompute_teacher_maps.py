@@ -60,6 +60,9 @@ def parse_args():
         "--save_feature", action="store_true",
         help="Pattern A 用に Teacher 特徴マップ F_T([C,H',W'] float16) も保存する",
     )
+    p.add_argument("--image_dir", default=None,
+                   help="任意画像フォルダを処理（疑似異常等）。--splits の代わりに使う")
+    p.add_argument("--image_dir_split", default="pseudo", help="--image_dir の保存 split 名")
     p.add_argument(
         "--out",
         default=os.path.join(REPO_ROOT, "results", "distill_map", "precomputed"),
@@ -94,16 +97,17 @@ def _predict_with_features(pc, images):
     return list(image_scores), list(masks), feat_grid  # feat_grid: [B,C,H',W']
 
 
-def _process_split(pc, device, args, split_name, split_dir):
+def _process_split(pc, device, args, split_name, split_dir, dataset=None):
     os.makedirs(split_dir, exist_ok=True)
-    dataset = mvtec.MVTecDataset(
-        args.dataset_path,
-        classname=args.classname,
-        resize=args.resize,
-        imagesize=args.imagesize,
-        split=SPLIT_MAP[split_name],
-        seed=args.seed,
-    )
+    if dataset is None:
+        dataset = mvtec.MVTecDataset(
+            args.dataset_path,
+            classname=args.classname,
+            resize=args.resize,
+            imagesize=args.imagesize,
+            split=SPLIT_MAP[split_name],
+            seed=args.seed,
+        )
     limit = {"train": args.max_train, "test": args.max_test}.get(split_name)
     if limit is None:
         limit = args.max_per_split
@@ -125,7 +129,8 @@ def _process_split(pc, device, args, split_name, split_dir):
         if done >= n_total:
             break
         images = batch["image"]
-        image_paths = batch["image_name"]
+        image_names = batch["image_name"]
+        full_paths = batch.get("image_path", image_names)
         is_anomaly = batch["is_anomaly"].numpy().tolist()
         masks_gt = batch.get("mask")
 
@@ -140,9 +145,10 @@ def _process_split(pc, device, args, split_name, split_dir):
             amap = np.asarray(amaps[i], dtype=np.float32)
             if map_h is None:
                 map_h, map_w = amap.shape
-            sid = _sample_id(image_paths[i])
+            sid = _sample_id(image_names[i])
             record = {
-                "image_path": image_paths[i],
+                "image_path": full_paths[i],
+                "image_name": image_names[i],
                 "teacher_anomaly_map": torch.from_numpy(amap),
                 "teacher_anomaly_score": float(scores[i]),
                 "label": int(is_anomaly[i]),
@@ -232,9 +238,19 @@ def main():
     print(f"教師ロード完了: {args.teacher}")
 
     all_stats = {}
-    for split_name in args.splits:
+    if args.image_dir:
+        from patchcore.distill_map.io_utils import ImageFolderDataset
+        split_name = args.image_dir_split
+        ds = ImageFolderDataset(args.image_dir, resize=args.resize, imagesize=args.imagesize)
+        print(f"画像フォルダ処理: {args.image_dir} → split='{split_name}' ({len(ds)} 枚)")
         split_dir = os.path.join(run_dir, split_name)
-        all_stats[split_name] = _process_split(pc, device, args, split_name, split_dir)
+        all_stats[split_name] = _process_split(
+            pc, device, args, split_name, split_dir, dataset=ds
+        )
+    else:
+        for split_name in args.splits:
+            split_dir = os.path.join(run_dir, split_name)
+            all_stats[split_name] = _process_split(pc, device, args, split_name, split_dir)
 
     with open(os.path.join(run_dir, "stats.json"), "w") as f:
         json.dump(all_stats, f, ensure_ascii=False, indent=2)

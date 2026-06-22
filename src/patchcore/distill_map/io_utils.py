@@ -4,11 +4,53 @@ Student 学習・評価から共通利用する。画像は既存 MVTecDataset �
 そのまま使うことで、Teacher target 生成時と Student 入力の前処理を一致させる
 （設計書 §21.1）。
 """
+import glob
 import os
 import re
 
+import PIL.Image
 import torch
 from torch.utils.data import Dataset
+from torchvision import transforms
+
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
+
+
+def build_eval_transform(resize: int = 256, imagesize: int = 224):
+    """MVTecDataset と同一の画像前処理（設計書 §21.1 で Teacher と一致必須）。"""
+    return transforms.Compose([
+        transforms.Resize(resize),
+        transforms.CenterCrop(imagesize),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+    ])
+
+
+class ImageFolderDataset(Dataset):
+    """フォルダ内の画像を MVTec 同一前処理で読む（precompute の --image_dir 用）。"""
+
+    def __init__(self, folder: str, resize: int = 256, imagesize: int = 224, is_anomaly: int = 1):
+        exts = ("*.png", "*.jpg", "*.jpeg", "*.bmp")
+        self.paths = sorted(p for e in exts for p in glob.glob(os.path.join(folder, e)))
+        if not self.paths:
+            raise RuntimeError(f"画像が見つかりません: {folder}")
+        self.transform = build_eval_transform(resize, imagesize)
+        self.is_anomaly = is_anomaly
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, idx):
+        path = self.paths[idx]
+        image = self.transform(PIL.Image.open(path).convert("RGB"))
+        return {
+            "image": image,
+            "mask": torch.zeros([1, image.shape[1], image.shape[2]]),
+            "is_anomaly": self.is_anomaly,
+            "image_name": os.path.basename(path),
+            "image_path": path,
+        }
 
 
 def sample_id(image_name: str) -> str:
@@ -74,17 +116,66 @@ class TeacherTargetDataset(Dataset):
         return out
 
 
-def fit_score_stats(dataset: TeacherTargetDataset) -> dict:
-    """学習データの Teacher スコアから正規化統計を算出する。"""
-    scores = torch.tensor(
-        [
-            torch.load(os.path.join(dataset.dir, sid + ".pt"), weights_only=False)[
-                "teacher_anomaly_score"
-            ]
-            for _, sid in dataset.items
-        ],
-        dtype=torch.float64,
-    )
+class DirectImageTargetDataset(Dataset):
+    """precompute 済み split を、画像を image_path から直接読んで対応付ける。
+
+    疑似異常など MVTecDataset の index に対応しない画像群（precompute の
+    --image_dir で生成）を Student 学習に使うためのデータセット。返り値は
+    :class:`TeacherTargetDataset` と同一キー。
+    """
+
+    def __init__(self, targets_split_dir: str, resize: int = 256, imagesize: int = 224,
+                 load_feature: bool = False):
+        self.dir = targets_split_dir
+        self.files = sorted(glob.glob(os.path.join(targets_split_dir, "*.pt")))
+        if not self.files:
+            raise RuntimeError(f"target .pt が見つかりません: {targets_split_dir}")
+        self.transform = build_eval_transform(resize, imagesize)
+        self.load_feature = load_feature
+        # fit_score_stats 互換のため items=(idx, sid) を用意
+        self.items = [(i, os.path.basename(f)[:-3]) for i, f in enumerate(self.files)]
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, j):
+        rec = torch.load(self.files[j], weights_only=False)
+        image = self.transform(PIL.Image.open(rec["image_path"]).convert("RGB"))
+        amap = rec["teacher_anomaly_map"]
+        if amap.dim() == 2:
+            amap = amap.unsqueeze(0)
+        out = {
+            "image": image,
+            "teacher_map": amap.float(),
+            "teacher_score": torch.tensor(
+                float(rec["teacher_anomaly_score"]), dtype=torch.float32
+            ),
+            "label": int(rec["label"]),
+            "sample_id": os.path.basename(self.files[j])[:-3],
+            "image_path": rec["image_path"],
+        }
+        if self.load_feature:
+            out["teacher_feature"] = rec["teacher_feature_map"].float()
+        return out
+
+
+def _dataset_scores(dataset):
+    """dataset（.items/.dir を持つ）から Teacher スコア list を集める。"""
+    return [
+        float(torch.load(os.path.join(dataset.dir, sid + ".pt"), weights_only=False)[
+            "teacher_anomaly_score"
+        ])
+        for _, sid in dataset.items
+    ]
+
+
+def fit_score_stats(dataset) -> dict:
+    """学習データ（単一 or リスト）の Teacher スコアから正規化統計を算出する。"""
+    datasets = dataset if isinstance(dataset, (list, tuple)) else [dataset]
+    vals = []
+    for d in datasets:
+        vals.extend(_dataset_scores(d))
+    scores = torch.tensor(vals, dtype=torch.float64)
     return {
         "mean": float(scores.mean()),
         "std": float(scores.std()),
