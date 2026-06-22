@@ -4,11 +4,14 @@
 run_distillation.py が出力した results.csv（method, auroc, f1, memory_mb, fps, ...）を
 読み、AUROC×メモリのトレードオフ散布図と各指標の棒グラフを描く。
 
-usage: PYTHONPATH=./src python scripts/compare_distillation.py <run_dir>
+run_dir には run_distillation.py が timestamp 付きで作る実行フォルダ（meta.json 同梱）を
+渡す。図は既定でその run_dir 内に出力するため、実験ごとに分離され上書きされない。
+
+usage: PYTHONPATH=./src python scripts/compare_distillation.py <run_dir> [--out DIR]
 """
+import argparse
 import csv
 import os
-import sys
 
 import matplotlib
 
@@ -36,10 +39,14 @@ def load_rows(csv_path):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("usage: compare_distillation.py <run_dir>")
-        sys.exit(1)
-    run_dir = sys.argv[1]
+    parser = argparse.ArgumentParser(description="蒸留手法の比較プロット生成")
+    parser.add_argument("run_dir", help="results.csv を含む実行フォルダ")
+    parser.add_argument("--out", default=None, help="図の出力先（既定: run_dir）")
+    args = parser.parse_args()
+
+    run_dir = args.run_dir
+    out_dir = args.out or run_dir
+    os.makedirs(out_dir, exist_ok=True)
     rows = load_rows(os.path.join(run_dir, "results.csv"))
     methods = [r["method"] for r in rows]
 
@@ -78,7 +85,7 @@ def main():
     ax.grid(True, axis="y", alpha=0.3)
 
     plt.tight_layout()
-    out_path = os.path.join(run_dir, "comparison.png")
+    out_path = os.path.join(out_dir, "comparison.png")
     plt.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"[plot] {out_path}")
