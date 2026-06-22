@@ -171,5 +171,40 @@ def compute_and_store_final_results(
             mean_scores = ["Mean"] + mean_scores
         csv_writer.writerow(mean_scores)
 
+    # 規約: 実験結果は図を伴う。平均指標の棒グラフを results.csv と並べて保存する。
+    _plot_results_summary(results_path, mean_metrics)
+
     mean_metrics = {"mean_{0}".format(key): item for key, item in mean_metrics.items()}
     return mean_metrics
+
+
+def _plot_results_summary(results_path, mean_metrics):
+    """平均指標の棒グラフを results_summary.png として保存する（規約 R3）。"""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        plt.rcParams["font.family"] = "Noto Sans CJK JP"
+        plt.rcParams["axes.unicode_minus"] = False
+
+        keys = list(mean_metrics.keys())
+        vals = [mean_metrics[k] for k in keys]
+        fig, ax = plt.subplots(figsize=(max(6, len(keys) * 1.6), 4.5))
+        bars = ax.bar(keys, vals, color="#1f77b4")
+        ax.set_title("評価指標サマリ（全データセット平均）")
+        ax.set_ylabel("Score")
+        ax.set_ylim(0, max(1.0, max(vals) * 1.05) if vals else 1.0)
+        ax.tick_params(axis="x", rotation=20)
+        ax.grid(True, axis="y", alpha=0.3)
+        for b, v in zip(bars, vals):
+            ax.text(b.get_x() + b.get_width() / 2, v, f"{v:.3f}",
+                    ha="center", va="bottom", fontsize=8)
+        plt.tight_layout()
+        out_path = os.path.join(results_path, "results_summary.png")
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        LOGGER.info("Saved results summary plot: {}".format(out_path))
+    except Exception as exc:  # 図の失敗で結果保存を壊さない
+        LOGGER.warning("results_summary.png の生成に失敗: {}".format(exc))

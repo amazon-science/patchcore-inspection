@@ -4,6 +4,7 @@ CLAUDE.md「実行・結果出力の規約」に従い、各実行を
 `<base>/<YYYYMMDD_HHMMSS>/`（JST）に隔離して既存結果を上書きせず、
 再現用の `meta.json` と実行ログ `log.txt` を残すための小ユーティリティ。
 """
+import atexit
 import json
 import os
 import subprocess
@@ -115,3 +116,27 @@ class Tee:
         sys.stdout, sys.stderr = self._stdout, self._stderr
         self._file.close()
         return False
+
+
+def start_tee(run_dir: str, filename: str = "log.txt"):
+    """sys.stdout/stderr を `run_dir/log.txt` にも複製し、ファイルを返す。
+
+    本体を `with` で囲みにくい click ベースのスクリプト向け。プロセス終了時に
+    atexit で元の stdout/stderr を復元する（ファイルは明示クローズしない＝
+    logging のシャットダウン flush と競合させないため）。返り値のファイルを
+    `logging.StreamHandler` に渡せば LOGGER 出力も同じ log.txt に集約できる。
+    """
+    f = open(os.path.join(run_dir, filename), "a")
+    orig_out, orig_err = sys.stdout, sys.stderr
+    sys.stdout = _Fork(orig_out, f)
+    sys.stderr = _Fork(orig_err, f)
+
+    def _restore():
+        sys.stdout, sys.stderr = orig_out, orig_err
+        try:
+            f.flush()
+        except Exception:
+            pass
+
+    atexit.register(_restore)
+    return f
