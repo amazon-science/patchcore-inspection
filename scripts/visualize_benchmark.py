@@ -1,15 +1,19 @@
 """ベンチマーク結果を可視化するスクリプト。
 
 Usage:
-    python scripts/visualize_benchmark.py [--results_dir RESULTS_DIR]
+    PYTHONPATH=./src python scripts/visualize_benchmark.py [--results_dir DIR] [--out DIR]
 
-Output:
-    results/Benchmark_Results/benchmark_plot.png
-    results/Benchmark_Results/benchmark_plot.html
+Output（規約準拠・上書きしない）:
+    <out>/<YYYYMMDD_HHMMSS>/benchmark_plot.png
+                          /benchmark_plot.html
+                          /meta.json /log.txt
+    out 既定: <results_dir>/viz
 """
 
 import argparse
+import os
 import re
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -19,6 +23,11 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+)
+from patchcore.runlog import Tee, jst_timestamp, make_run_dir, write_meta
 
 
 def load_results(results_dir: Path) -> pd.DataFrame:
@@ -210,15 +219,26 @@ def plot_plotly(df: pd.DataFrame, out_path: Path) -> None:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results_dir", default="results/Benchmark_Results",
-                        help="ベンチマーク結果のルートディレクトリ")
+                        help="ベンチマーク結果（Bench_*/results.csv）のルートディレクトリ")
+    parser.add_argument("--out", default=None,
+                        help="出力先の親（既定: <results_dir>/viz）。実体は <out>/<timestamp>/")
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
-    df = load_results(results_dir)
-    print(f"Loaded {len(df)} rows:\n{df.to_string()}\n")
+    out_base = args.out or str(results_dir / "viz")
+    ts = jst_timestamp()
+    run_dir = Path(make_run_dir(out_base, ts))
 
-    plot_matplotlib(df, results_dir / "benchmark_plot.png")
-    plot_plotly(df, results_dir / "benchmark_plot.html")
+    with Tee(str(run_dir)):
+        print(f"[results_dir] {results_dir}")
+        print(f"[out]         {run_dir}")
+        df = load_results(results_dir)
+        print(f"Loaded {len(df)} rows:\n{df.to_string()}\n")
+
+        plot_matplotlib(df, run_dir / "benchmark_plot.png")
+        plot_plotly(df, run_dir / "benchmark_plot.html")
+    write_meta(str(run_dir), {"results_dir": str(results_dir), "n_rows": int(len(df))})
+    print(f"[meta] {run_dir / 'meta.json'}")
 
 
 if __name__ == "__main__":
