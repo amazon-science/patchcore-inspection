@@ -102,9 +102,9 @@
 
 ### src/patchcore/distill_map/ — マップ蒸留の共通モジュール（ライブラリ）
 
-- **位置づけ**：単体実行しない**ライブラリ**。`pooling`（map→score）、`losses`（map/score 蒸留 loss）等を提供し、`bin/` のエントリから呼ばれる。
+- **位置づけ**：単体実行しない**ライブラリ**。`pooling`（map→score）、`losses`（map/score 蒸留 loss）、`student_fpn`（ResNet18+FPN+Decoder, Pattern B）等を提供し、`bin/` のエントリから呼ばれる。
 - **前提**：`PYTHONPATH=./src`。
-- **動作確認**：`PYTHONPATH=./src .venv/bin/python -c "from patchcore.distill_map import pooling, losses"`
+- **動作確認**：`PYTHONPATH=./src .venv/bin/python -c "from patchcore.distill_map import pooling, losses, student_fpn"`
 
 ### scripts/precompute_teacher_maps.py — Teacher 異常マップ/スコアの事前計算
 
