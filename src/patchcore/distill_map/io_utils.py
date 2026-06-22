@@ -160,7 +160,7 @@ class DirectImageTargetDataset(Dataset):
 
 
 def _dataset_scores(dataset):
-    """dataset（.items/.dir を持つ）から Teacher スコア list を集める。"""
+    """dataset（.items/.dir を持つ）から Teacher スコア list を集める（フォールバック）。"""
     return [
         float(torch.load(os.path.join(dataset.dir, sid + ".pt"), weights_only=False)[
             "teacher_anomaly_score"
@@ -169,18 +169,55 @@ def _dataset_scores(dataset):
     ]
 
 
+def _split_stats_from_json(dataset):
+    """dataset.dir に対応する precompute の stats.json から split 統計を返す。
+
+    見つからなければ None。allfeat（特徴入りで .pt が巨大）でも .pt を読まずに
+    正規化統計を得るための高速経路。
+    """
+    import json
+    run_root = os.path.dirname(os.path.normpath(dataset.dir))
+    split = os.path.basename(os.path.normpath(dataset.dir))
+    path = os.path.join(run_root, "stats.json")
+    if not os.path.isfile(path):
+        return None
+    with open(path) as f:
+        stats = json.load(f)
+    s = stats.get(split)
+    if not s or s.get("score_mean") is None:
+        return None
+    return {
+        "count": int(s["count"]), "mean": float(s["score_mean"]),
+        "std": float(s["score_std"]), "min": float(s["score_min"]),
+        "max": float(s["score_max"]),
+    }
+
+
 def fit_score_stats(dataset) -> dict:
-    """学習データ（単一 or リスト）の Teacher スコアから正規化統計を算出する。"""
+    """学習データ（単一 or リスト）の Teacher スコアから正規化統計を算出する。
+
+    各 dataset の precompute stats.json があればそれを正確に合成（.pt を読まない）。
+    無い dataset があれば、その分だけ .pt を走査するフォールバックに切り替える。
+    """
     datasets = dataset if isinstance(dataset, (list, tuple)) else [dataset]
-    vals = []
+    per = [_split_stats_from_json(d) for d in datasets]
+    if all(p is not None for p in per):  # 高速経路：stats.json から厳密合成
+        n = sum(p["count"] for p in per)
+        mean = sum(p["count"] * p["mean"] for p in per) / n
+        # pooled variance: E[x^2] - mean^2、E[x^2]_i = std_i^2 + mean_i^2
+        ex2 = sum(p["count"] * (p["std"] ** 2 + p["mean"] ** 2) for p in per) / n
+        var = max(0.0, ex2 - mean ** 2)
+        return {
+            "mean": mean, "std": var ** 0.5,
+            "min": min(p["min"] for p in per), "max": max(p["max"] for p in per),
+        }
+    vals = []  # フォールバック：.pt を走査
     for d in datasets:
         vals.extend(_dataset_scores(d))
     scores = torch.tensor(vals, dtype=torch.float64)
     return {
-        "mean": float(scores.mean()),
-        "std": float(scores.std()),
-        "min": float(scores.min()),
-        "max": float(scores.max()),
+        "mean": float(scores.mean()), "std": float(scores.std()),
+        "min": float(scores.min()), "max": float(scores.max()),
     }
 
 
