@@ -188,7 +188,9 @@ with open(manifest) as f:
             "ap": s.get("average_precision"),
             "f1_max": s.get("f1_max"),
             "fps": se.get("fps"),
+            "infer_ms": se.get("inference_time_ms"),
             "params_M": (se.get("parameters") or 0) / 1e6 if se.get("parameters") else None,
+            "model_size_MB": se.get("model_size_mb"),
             "gpu_mem_MB": se.get("gpu_memory_mb") or se.get("gpu_memory"),
         })
         if teacher_row is None and "teacher" in im:
@@ -197,7 +199,9 @@ with open(manifest) as f:
                 "id": "T0", "name": "PatchCore_Teacher", "pattern": "-", "pseudo": "-",
                 "auroc": t.get("auroc"), "ap": t.get("average_precision"),
                 "f1_max": t.get("f1_max"), "fps": te.get("fps"),
+                "infer_ms": te.get("inference_time_ms"),
                 "params_M": (te.get("parameters") or 0) / 1e6 if te.get("parameters") else None,
+                "model_size_MB": te.get("model_size_mb"),
                 "gpu_mem_MB": te.get("gpu_memory_mb") or te.get("gpu_memory"),
             }
 
@@ -205,7 +209,8 @@ order = {"P1": 1, "P2": 2, "P3": 3, "P4": 4}
 rows.sort(key=lambda r: order.get(r["id"], 9))
 all_rows = ([teacher_row] if teacher_row else []) + rows
 
-cols = ["id", "name", "pattern", "pseudo", "auroc", "ap", "f1_max", "fps", "params_M", "gpu_mem_MB"]
+cols = ["id", "name", "pattern", "pseudo", "auroc", "ap", "f1_max",
+        "fps", "infer_ms", "params_M", "model_size_MB", "gpu_mem_MB"]
 csv_path = os.path.join(master, "summary.csv")
 with open(csv_path, "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=cols)
