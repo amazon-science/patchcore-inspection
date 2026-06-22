@@ -106,6 +106,24 @@
 - **前提**：`PYTHONPATH=./src`。
 - **動作確認**：`PYTHONPATH=./src .venv/bin/python -c "from patchcore.distill_map import pooling, losses"`
 
+### scripts/precompute_teacher_maps.py — Teacher 異常マップ/スコアの事前計算
+
+- **目的**：学習済み PatchCore を 1 度 forward し、各サンプルの A_T（異常マップ）・s_T（スコア）を `.pt` 保存（蒸留の教師信号）。正規化は学習時に行うため**生のまま保存**。
+- **前提**：`PYTHONPATH=./src`、教師フォルダ（`patchcore_params.pkl`）、GPU。保護対象データは読み取りのみ。
+- **コマンド例**：
+  ```bash
+  # スモーク（各 split 4 枚）
+  PYTHONPATH=./src .venv/bin/python scripts/precompute_teacher_maps.py <teacher_dir> \
+    --gpu 0 --seed 0 --splits test train --max_per_split 4
+  # 本実行
+  PYTHONPATH=./src .venv/bin/python scripts/precompute_teacher_maps.py <teacher_dir> \
+    --gpu 0 --seed 0 --splits train test
+  ```
+- **出力先**：`results/distill_map/precomputed/<YYYYMMDD_HHMMSS>/`
+  - `<split>/<sample_id>.pt`（image_path / teacher_anomaly_map / teacher_anomaly_score / label / mask）
+  - `stats.json`（スコア統計・map サイズ）/ `teacher_targets_sanity.png` / `meta.json` / `log.txt`
+- **想定時間**：枚数・バンクサイズ依存（train 全枚数だと長時間。スモークは数十秒）
+
 ---
 
 ## 比較・可視化スクリプト
