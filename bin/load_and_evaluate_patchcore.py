@@ -11,6 +11,7 @@ import torch
 import patchcore.common
 import patchcore.metrics
 import patchcore.patchcore
+import patchcore.runlog
 import patchcore.sampler
 import patchcore.utils
 
@@ -33,6 +34,13 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
     methods = {key: item for (key, item) in methods}
 
     os.makedirs(results_path, exist_ok=True)
+
+    # 規約: 再現メタ情報と実行ログを結果フォルダに残す（R4/R5）
+    patchcore.runlog.write_meta(results_path, {"seed": seed})
+    _logfile = patchcore.runlog.start_tee(results_path)
+    _fh = logging.StreamHandler(_logfile)
+    _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.getLogger().addHandler(_fh)
 
     device = patchcore.utils.set_torch_device(gpu)
     # Device context here is specifically set and used later

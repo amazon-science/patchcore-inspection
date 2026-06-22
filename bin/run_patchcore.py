@@ -18,6 +18,7 @@ import patchcore.backbones
 import patchcore.common
 import patchcore.metrics
 import patchcore.patchcore
+import patchcore.runlog
 import patchcore.sampler
 import patchcore.utils
 
@@ -54,6 +55,21 @@ def run(
     run_save_path = patchcore.utils.create_storage_folder(
         results_path, log_project, log_group, mode="iterate"
     )
+
+    # 規約: 再現メタ情報と実行ログを保存フォルダに残す（R4/R5）
+    patchcore.runlog.write_meta(
+        run_save_path,
+        {
+            "seed": seed,
+            "log_group": log_group,
+            "log_project": log_project,
+            "save_patchcore_model": save_patchcore_model,
+        },
+    )
+    _logfile = patchcore.runlog.start_tee(run_save_path)
+    _fh = logging.StreamHandler(_logfile)
+    _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.getLogger().addHandler(_fh)
 
     list_of_dataloaders = methods["get_dataloaders"](seed)
 
