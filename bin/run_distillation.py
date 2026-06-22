@@ -12,6 +12,7 @@ round_20 等の教師モデルを読み込み、そのメモリバンク（faiss
 """
 import argparse
 import os
+import subprocess
 import sys
 import time
 
@@ -21,6 +22,8 @@ from torch.utils.data import DataLoader, Subset
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "..", "src"))
+
+from patchcore.runlog import Tee, jst_timestamp, make_run_dir, write_meta
 
 import patchcore.common
 import patchcore.datasets.mvtec as mvtec
@@ -90,7 +93,7 @@ def evaluate_scorer(scorer, feats_per_image, labels, embed_time):
     }
 
 
-def main():
+def _build_parser():
     parser = argparse.ArgumentParser(description="PatchCore 蒸留手法の比較")
     parser.add_argument("teacher", help="教師モデルのフォルダ（patchcore_params.pkl を含む）")
     parser.add_argument("--gpu", type=int, default=0)
@@ -118,8 +121,10 @@ def main():
     parser.add_argument("--proto_steps", type=int, default=2000)
     parser.add_argument("--proto_temp", type=float, default=1.0, help="soft-min 温度（小さいほど min に近い）")
     parser.add_argument("--out", default=os.path.join(SCRIPT_DIR, "..", "results", "Distillation"))
-    args = parser.parse_args()
+    return parser
 
+
+def _run(args, run_dir):
     on_gpu = not args.no_faiss_on_gpu
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -226,10 +231,6 @@ def main():
         )
 
     # --- 結果保存 ---
-    os.makedirs(args.out, exist_ok=True)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(args.out, timestamp)
-    os.makedirs(run_dir, exist_ok=True)
     csv_path = os.path.join(run_dir, "results.csv")
     with open(csv_path, "w") as f:
         f.write("method,auroc,f1,memory_mb,fps,score_time_s,embed_time_s,n_test\n")
@@ -239,7 +240,32 @@ def main():
                 f"{r['fps']:.3f},{r['score_time_s']:.3f},{embed_time:.3f},{len(labels)}\n"
             )
     print(f"\n完了  CSV: {csv_path}")
-    print(f"プロット生成: PYTHONPATH=./src python scripts/compare_distillation.py {run_dir}")
+    return csv_path
+
+
+def _make_plot(run_dir):
+    """compare_distillation.py を呼び、規約どおり実験結果に図を伴わせる。"""
+    script = os.path.join(SCRIPT_DIR, "..", "scripts", "compare_distillation.py")
+    try:
+        out = subprocess.run(
+            [sys.executable, script, run_dir], capture_output=True, text=True
+        )
+        if out.stdout:
+            print(out.stdout, end="")
+        if out.returncode != 0:
+            print(f"[warn] プロット生成に失敗: {out.stderr.strip()}")
+    except Exception as e:
+        print(f"[warn] プロット生成をスキップ: {e}")
+
+
+def main():
+    args = _build_parser().parse_args()
+    run_dir = make_run_dir(args.out, jst_timestamp())
+    with Tee(run_dir):
+        _run(args, run_dir)
+        _make_plot(run_dir)
+    write_meta(run_dir, vars(args))
+    print(f"[meta] {os.path.join(run_dir, 'meta.json')}")
 
 
 if __name__ == "__main__":
