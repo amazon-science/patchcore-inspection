@@ -250,6 +250,22 @@
 - **出力先**：`-o` で指定（既定はカレント）
 - **想定時間**：アーカイブ規模依存
 
+### scripts/build_inpainting_dataset.py — Inpainting ペアを MVTec 形式に再構成
+
+- **目的**：Inpainting の `NNNNN_original.jpg` / `NNNNN_anomaly.jpg` ペアを `anomaly_dataset` と同じ MVTec 形式（`train/{good,abnormal}`・`test/{good,abnormal}`・`ground_truth/abnormal`）に再構成する。`original↔anomaly` の差分を二値化して GT マスク（白=異常, PNG 1bit）も生成する。
+- **前提**：`numpy` / `Pillow` / `scipy`。展開済みの `Inpainting_test` / `Inpainting_train` ディレクトリ。
+- **コマンド例**：
+  ```bash
+  python scripts/build_inpainting_dataset.py \
+    --test-src dataset/Inpainting_test \
+    --train-src dataset/Inpainting_train \
+    --out dataset/inpainting_dataset \
+    --threshold 30 --min-area 16
+  ```
+- **出力先**：`--out`（例 `dataset/inpainting_dataset/`）。test マスクは `ground_truth/abnormal/`（loader 対応）、train マスクは `ground_truth_train/abnormal/`（loader 非対象の参考用）。
+- **備考**：`original` が欠損する `anomaly` はマスクを生成せず画像のみコピー。
+- **想定時間**：数千枚で数分程度
+
 ### scripts/experiment_done_hook.py — 実験完了フック（自動実行）
 
 - **目的**：実験完了時に `results.csv` のサマリーを表示する PostToolUse フック。
