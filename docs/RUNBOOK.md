@@ -47,13 +47,23 @@
 
 ## 蒸留（distill）
 
-### src/patchcore/distill/train_student.py — 生徒 MLP の学習（知識蒸留）
+### bin/run_distillation.py — 蒸留手法の比較ハーネス（エントリポイント）
 
-- **目的**：教師 faiss バンクへの距離回帰で生徒 MLP を学習し、メモリ削減を図る。
-- **前提**：`PYTHONPATH=./src`、教師バンク特徴量。
-- **コマンド例**：（呼び出し方法を確定後にここへ追記）
-- **出力先**：（要記載）
-- **想定時間**：（要記載）
+- **目的**：教師 PatchCore のメモリバンクを M0〜M4 の軽量表現へ置き換え、AUROC×メモリ×FPS で比較する。
+- **前提**：`PYTHONPATH=./src`、教師モデルフォルダ（`patchcore_params.pkl` を含む）、GPU。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python bin/run_distillation.py <teacher_dir> \
+    --gpu 0 --seed 0 --methods M0 M1 M2 M3
+  ```
+- **出力先**：`results/Distillation/<YYYYMMDD_HHMMSS>/`（`--out` で親を変更可）
+  - `results.csv` / `comparison.png`（自動生成）/ `meta.json` / `log.txt`
+- **想定時間**：手法数・テスト枚数・生徒学習ステップ数依存（M3/M4 を含むと数分〜）
+
+### src/patchcore/distill/train_student.py — 生徒 MLP の学習（ライブラリ）
+
+- **位置づけ**：単体実行しない**ライブラリモジュール**。`train_student()` を `bin/run_distillation.py`（M3/M3L/M3R）が呼び出す。
+- **出力先**：呼び出し元（`run_distillation.py`）の `results/Distillation/<timestamp>/` に集約される。
 
 ---
 
@@ -62,35 +72,39 @@
 ### scripts/compare_distillation.py — 蒸留手法の比較プロット
 
 - **目的**：`results.csv`（method, auroc, f1, memory_mb, fps）から AUROC×メモリ散布図・指標棒グラフを描く。
-- **前提**：`PYTHONPATH=./src`、対象 run ディレクトリ。
+- **前提**：`PYTHONPATH=./src`、対象 run ディレクトリ（`run_distillation.py` が生成）。
 - **コマンド例**：
   ```bash
-  PYTHONPATH=./src python scripts/compare_distillation.py <run_dir>
+  PYTHONPATH=./src python scripts/compare_distillation.py <run_dir> [--out DIR]
   ```
-- **出力先**：`<run_dir>/comparison.png`
+- **出力先**：`<run_dir>/comparison.png`（`--out` で変更可）
 - **想定時間**：数秒
-- **備考**：現状は出力ファイル名が固定（上書きされる）。規約2・7 への準拠は別タスクで改修予定。
+- **備考**：通常は `run_distillation.py` が自動で呼び出す。run_dir は timestamp 付きで `meta.json` を含むため、図は実験ごとに分離される。
 
 ### scripts/compare_continual_learning.py — 継続学習 P×R 比較プロット
 
-- **目的**：`results/ContinualLearning/<timestamp>/results.csv` を読み、コアセット率 P × ラウンド数 R の 3×3 グリッド比較図を出力。
-- **前提**：`PYTHONPATH=./src`、対象結果ディレクトリ。
+- **目的**：継続学習 run 群の `results.csv` を読み、コアセット率 P × ラウンド数 R の比較図（曲線・サマリ）を出力。
+- **前提**：`PYTHONPATH=./src`、`--base` 配下に `RUNS` 表のタイムスタンプ run が存在すること。
 - **コマンド例**：
   ```bash
-  PYTHONPATH=./src python scripts/compare_continual_learning.py
+  PYTHONPATH=./src python scripts/compare_continual_learning.py \
+    [--base results/ContinualLearning] [--out DIR]
   ```
-- **出力先**：（要記載：`results/ContinualLearning/<timestamp>/`）
+- **出力先**：`results/ContinualLearning/comparison/<YYYYMMDD_HHMMSS>/`
+  - `comparison_curves.png` / `comparison_summary.png` / `meta.json` / `log.txt`
 - **想定時間**：数秒
 
 ### scripts/visualize_benchmark.py — ベンチマーク結果の可視化
 
-- **目的**：ベンチマーク結果から比較図（PNG / HTML）を生成。
-- **前提**：`results_dir` に集計済み結果。
+- **目的**：ベンチマーク結果（`Bench_*/results.csv`）から比較図（PNG / HTML）を生成。
+- **前提**：`PYTHONPATH=./src`、`--results_dir` に集計済み結果。
 - **コマンド例**：
   ```bash
-  python scripts/visualize_benchmark.py [--results_dir RESULTS_DIR]
+  PYTHONPATH=./src python scripts/visualize_benchmark.py \
+    [--results_dir results/Benchmark_Results] [--out DIR]
   ```
-- **出力先**：`results/Benchmark_Results/benchmark_plot.png` / `benchmark_plot.html`
+- **出力先**：`results/Benchmark_Results/viz/<YYYYMMDD_HHMMSS>/`
+  - `benchmark_plot.png` / `benchmark_plot.html` / `meta.json` / `log.txt`
 - **想定時間**：数秒
 
 ---
@@ -115,6 +129,12 @@
 
 - **目的**：実験完了時に `results.csv` のサマリーを表示する PostToolUse フック。
 - **前提**：Claude Code のフックとして自動起動（手動実行は通常不要）。
+
+### src/patchcore/runlog.py — 出力規約準拠の共通ヘルパ（ライブラリ）
+
+- **位置づけ**：単体実行しない**ライブラリモジュール**。実験スクリプトが import して使う。
+- **API**：`jst_timestamp()` / `make_run_dir(base)` / `write_meta(run_dir, extra)` / `Tee(run_dir)`。
+- **用途**：新規スクリプトを規約（タイムスタンプ出力・`meta.json`・`log.txt`）に準拠させる際の共通基盤。
 
 ---
 
