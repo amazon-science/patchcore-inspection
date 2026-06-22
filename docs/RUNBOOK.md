@@ -124,6 +124,24 @@
   - `stats.json`（スコア統計・map サイズ）/ `teacher_targets_sanity.png` / `meta.json` / `log.txt`
 - **想定時間**：枚数・バンクサイズ依存（train 全枚数だと長時間。スモークは数十秒）
 
+### bin/train_distill_map.py — Pattern B Student の蒸留学習（エントリポイント）
+
+- **目的**：precompute 済み Teacher target を教師信号に、画像→異常マップ Student を学習（`L = λ_map·L_map + λ_score·L_score`）。
+- **前提**：`PYTHONPATH=./src`、precompute 出力フォルダ（`train/` を含む）、GPU。画像前処理は precompute と一致（同一 MVTecDataset）。
+- **コマンド例**：
+  ```bash
+  # スモーク（少枚数・少 epoch）
+  PYTHONPATH=./src .venv/bin/python bin/train_distill_map.py <precompute_dir> \
+    --name SMOKE --gpu 0 --pretrained 0 --epochs 3 --batch_size 2 --val_ratio 0.25
+  # 本実行（S2: normal only）
+  PYTHONPATH=./src .venv/bin/python bin/train_distill_map.py <precompute_dir> \
+    --name S2_image_to_map --gpu 0 --epochs 100 --batch_size 32 \
+    --lambda_map 1.0 --lambda_score 0.1 --normalize minmax
+  ```
+- **出力先**：`results/distill_map/<name>_<YYYYMMDD_HHMMSS>/`
+  - `checkpoints/{best,last}.ckpt` / `train_curve.png` / `train_log.csv` / `config.json` / `meta.json` / `log.txt`
+- **想定時間**：枚数・epoch 依存（train 全枚数×100ep は長時間）
+
 ---
 
 ## 比較・可視化スクリプト

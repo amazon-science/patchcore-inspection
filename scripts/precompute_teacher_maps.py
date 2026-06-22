@@ -13,7 +13,6 @@ CLAUDE.md「実行・結果出力の規約」に従い、出力は ``results/dis
 import argparse
 import json
 import os
-import re
 
 import matplotlib
 
@@ -27,6 +26,7 @@ import patchcore.common
 import patchcore.patchcore
 import patchcore.runlog as runlog
 from patchcore.datasets import mvtec
+from patchcore.distill_map.io_utils import sample_id as _sample_id
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -65,11 +65,6 @@ def parse_args():
         help="サニティ図の転記先（ロードマップ用）。空文字で無効化",
     )
     return p.parse_args()
-
-
-def _sample_id(image_name: str) -> str:
-    """image_name（'.../split/type/000.png'）をファイル名に使える ID へ変換。"""
-    return re.sub(r"[^0-9A-Za-z_.-]", "__", image_name)
 
 
 def _process_split(pc, device, args, split_name, split_dir):
