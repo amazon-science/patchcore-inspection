@@ -94,6 +94,20 @@
 
 ---
 
+## マップ蒸留（distill_map）
+
+> 既存の distill（M0-M4 スコア蒸留）とは**別軸の独立実験**。ResNet18-FPN/Decoder
+> Student で PatchCore の異常マップ A_T・スコア s_T を dense 予測として蒸留する。
+> 設計：`meeting_logs/PatchCore_知識蒸留_実装設計書.md` / 計画：`meeting_logs/roadmap/roadmap_20260622.md`。
+
+### src/patchcore/distill_map/ — マップ蒸留の共通モジュール（ライブラリ）
+
+- **位置づけ**：単体実行しない**ライブラリ**。`pooling`（map→score）、`losses`（map/score 蒸留 loss）等を提供し、`bin/` のエントリから呼ばれる。
+- **前提**：`PYTHONPATH=./src`。
+- **動作確認**：`PYTHONPATH=./src .venv/bin/python -c "from patchcore.distill_map import pooling, losses"`
+
+---
+
 ## 比較・可視化スクリプト
 
 ### scripts/compare_distillation.py — 蒸留手法の比較プロット
