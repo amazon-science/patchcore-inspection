@@ -177,6 +177,8 @@ with open(manifest) as f:
         im = json.load(open(os.path.join(eval_dir, "metrics", "image_metrics.json")))
         eff_path = os.path.join(eval_dir, "metrics", "efficiency_metrics.json")
         eff = json.load(open(eff_path)) if os.path.exists(eff_path) else {}
+        fid_path = os.path.join(eval_dir, "metrics", "distillation_fidelity.json")
+        fid = json.load(open(fid_path)) if os.path.exists(fid_path) else {}
         s = im.get("student", {})
         se = eff.get("student", {})
         rows.append({
@@ -187,6 +189,8 @@ with open(manifest) as f:
             "auroc": s.get("auroc"),
             "ap": s.get("average_precision"),
             "f1_max": s.get("f1_max"),
+            "map_mse": fid.get("map_mse"),
+            "map_mae": fid.get("map_mae"),
             "fps": se.get("fps"),
             "infer_ms": se.get("inference_time_ms"),
             "params_M": (se.get("parameters") or 0) / 1e6 if se.get("parameters") else None,
@@ -198,7 +202,9 @@ with open(manifest) as f:
             teacher_row = {
                 "id": "T0", "name": "PatchCore_Teacher", "pattern": "-", "pseudo": "-",
                 "auroc": t.get("auroc"), "ap": t.get("average_precision"),
-                "f1_max": t.get("f1_max"), "fps": te.get("fps"),
+                "f1_max": t.get("f1_max"),
+                "map_mse": 0.0, "map_mae": 0.0,
+                "fps": te.get("fps"),
                 "infer_ms": te.get("inference_time_ms"),
                 "params_M": (te.get("parameters") or 0) / 1e6 if te.get("parameters") else None,
                 "model_size_MB": te.get("model_size_mb"),
@@ -210,6 +216,7 @@ rows.sort(key=lambda r: order.get(r["id"], 9))
 all_rows = ([teacher_row] if teacher_row else []) + rows
 
 cols = ["id", "name", "pattern", "pseudo", "auroc", "ap", "f1_max",
+        "map_mse", "map_mae",
         "fps", "infer_ms", "params_M", "model_size_MB", "gpu_mem_MB"]
 csv_path = os.path.join(master, "summary.csv")
 with open(csv_path, "w", newline="") as f:
