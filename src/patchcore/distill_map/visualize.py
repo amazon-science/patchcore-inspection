@@ -25,22 +25,41 @@ def denorm_image(img: torch.Tensor) -> np.ndarray:
     return x
 
 
+def _to01(a: np.ndarray):
+    """各マップを自前の min-max で [0,1] に正規化（位置・形状を公平に比較するため）。
+    Teacher（生スケール ~0-6）と Student（正規化スケール ~0-1）は絶対値の桁が異なるため、
+    共有カラーバーだと Student が潰れて見える。絶対値は title の max= で別途明示する。"""
+    lo, hi = float(a.min()), float(a.max())
+    rng = hi - lo
+    if rng < 1e-9:
+        return np.zeros_like(a), lo, hi
+    return (a - lo) / rng, lo, hi
+
+
 def save_panel(out_dir, sample_id, image, teacher_map, student_map, score_info=None):
-    """1 サンプルの可視化パネルを ``<out_dir>/<sample_id>_panel.png`` に保存。"""
+    """1 サンプルの可視化パネルを ``<out_dir>/<sample_id>_panel.png`` に保存。
+
+    Teacher / Student をそれぞれ自前 min-max で [0,1] 正規化して描画する
+    （絶対スケールが桁違いでも形状・局在位置を比較できる）。各マップの実 max は
+    タイトルに ``max=`` で残す。差分・overlay も [0,1] 基準で計算する。"""
     os.makedirs(out_dir, exist_ok=True)
     img = denorm_image(image)
-    t = teacher_map.detach().cpu().float().numpy()
-    s = student_map.detach().cpu().float().squeeze().numpy()
+    t_raw = teacher_map.detach().cpu().float().numpy()
+    s_raw = student_map.detach().cpu().float().squeeze().numpy()
+    t, t_lo, t_hi = _to01(t_raw)
+    s, s_lo, s_hi = _to01(s_raw)
     diff = np.abs(t - s)
-    vmax = max(float(t.max()), float(s.max()), 1e-6)
 
     fig, axes = plt.subplots(1, 5, figsize=(18, 4))
     axes[0].imshow(img); axes[0].set_title("入力画像")
-    im1 = axes[1].imshow(t, cmap="jet", vmin=0, vmax=vmax); axes[1].set_title("Teacher A_T")
-    im2 = axes[2].imshow(s, cmap="jet", vmin=0, vmax=vmax); axes[2].set_title("Student A_S")
-    im3 = axes[3].imshow(diff, cmap="jet"); axes[3].set_title("|A_T - A_S|")
+    im1 = axes[1].imshow(t, cmap="jet", vmin=0, vmax=1)
+    axes[1].set_title(f"Teacher A_T (max={t_hi:.2f})")
+    im2 = axes[2].imshow(s, cmap="jet", vmin=0, vmax=1)
+    axes[2].set_title(f"Student A_S (max={s_hi:.2f})")
+    im3 = axes[3].imshow(diff, cmap="jet", vmin=0, vmax=1)
+    axes[3].set_title("|A_T - A_S| (各[0,1]正規化後)")
     axes[4].imshow(img)
-    axes[4].imshow(s, cmap="jet", alpha=0.5, vmin=0, vmax=vmax)
+    axes[4].imshow(s, cmap="jet", alpha=0.5, vmin=0, vmax=1)
     axes[4].set_title("overlay (A_S)")
     for ax in axes:
         ax.set_xlabel("x [px]"); ax.set_ylabel("y [px]")
