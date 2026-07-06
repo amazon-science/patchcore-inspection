@@ -134,6 +134,26 @@
   - `stats.json`（スコア統計・map サイズ）/ `teacher_targets_sanity.png` / `meta.json` / `log.txt`
 - **想定時間**：枚数・バンクサイズ依存（train 全枚数だと長時間。スモークは数十秒）
 
+### bin/precompute_student_features.py — 凍結前段の出力 F_S を事前計算（③-B 高速化）
+
+- **目的**：③-B で後段を F_S で再学習する際、凍結前段(image_to_feature)を毎エポック回すのを避けるため、**F_S を一度だけ計算して保存**する。前段は凍結＋学習時データ拡張なし（決定的変換）なので F_S はエポック不変＝キャッシュは完全等価。生成物は既存 precompute と同形式（`teacher_feature_map` を F_S に差し替え、A_T 等は元 Teacher 値を継承）で、後段は既存 `feature_to_map` 経路（backbone forward 不要）で高速学習できる。
+- **前提**：`PYTHONPATH=./src`、前段 `best.ckpt`、元 precompute（train/ ＋ 任意で疑似）、GPU。
+- **コマンド例**：
+  ```bash
+  # スモーク（各 split 20 枚）
+  PYTHONPATH=./src .venv/bin/python bin/precompute_student_features.py \
+    --front_checkpoint <P5_run>/checkpoints/best.ckpt \
+    --targets_dir <allfeat_precompute> --pseudo_dir <pseudo_precompute>/pseudo \
+    --gpu 0 --max_per_split 20
+  # 本実行
+  PYTHONPATH=./src .venv/bin/python bin/precompute_student_features.py \
+    --front_checkpoint <P5_run>/checkpoints/best.ckpt \
+    --targets_dir <allfeat_precompute> --pseudo_dir <pseudo_precompute>/pseudo --gpu 0
+  ```
+- **出力先**：`results/distill_map/precomputed_student_feat/<name>_<YYYYMMDD_HHMMSS>/{train,pseudo}/*.pt` ＋ `meta.json` / `log.txt`
+- **後続**：`bin/train_distill_map.py <出力> --pseudo_dir <出力>/pseudo --pattern feature_to_map`（＝③-B 後段学習）。評価は `eval_distill_map.py --front_checkpoint <P5> --checkpoint <③-B後段>`。
+- **想定時間**：前段1パス（数分〜十数分、枚数依存）
+
 ### bin/train_distill_map.py — Pattern B Student の蒸留学習（エントリポイント）
 
 - **目的**：precompute 済み Teacher target を教師信号に、画像→異常マップ Student を学習（`L = λ_map·L_map + λ_score·L_score`）。
