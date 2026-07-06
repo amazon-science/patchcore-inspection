@@ -304,6 +304,19 @@
 - **出力先**：`results/distill_map/compare_conditions3_<YYYYMMDD_HHMMSS>/compare_6conditions.png` ＋ `meta.json` / `log.txt`
 - **想定時間**：数十秒（num×条件数の推論）
 
+### bin/render_results_table.py — 結果表をスライド体裁の PNG で描画
+
+- **目的**：`aggregate_distill_final.py` の comparison.csv（精度）と `bench_networks.py` の networks.csv（性能=pipeline合計）を結合し、緑ヘッダ・グループ見出し（異常マップ評価/異常スコア評価/パフォーマンス）のスライド用結果表 PNG を生成。P5(③) は後段凍結(P5-A)/後段再学習(P5-B)の2行。
+- **前提**：`PYTHONPATH=./src`、上記2つの CSV。GPU 不要。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python bin/render_results_table.py \
+    --compare_csv results/distill_map/final_compare3_<ts>/comparison.csv \
+    --bench_csv   results/distill_map/bench_networks3_<ts>/networks.csv
+  ```
+- **出力先**：`results/distill_map/results_table_<YYYYMMDD_HHMMSS>/results_table.png` ＋ `results_table.csv` / `meta.json`
+- **想定時間**：数秒
+
 ### scripts/compare_distillation.py — 蒸留手法の比較プロット
 
 - **目的**：`results.csv`（method, auroc, f1, memory_mb, fps）から AUROC×メモリ散布図・指標棒グラフを描く。
