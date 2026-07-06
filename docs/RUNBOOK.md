@@ -289,6 +289,21 @@
   - `comparison.csv`（id/label/入力/学習/特徴生成/後段/auroc/ap/f1_max/map_mse/map_mae/score_spearman）/ `comparison_scores.png` / `meta.json` / `log.txt`
 - **想定時間**：数秒
 
+### bin/compare_condition_panels.py — 条件横断の異常マップ比較グリッド（③A/③B込み）
+
+- **目的**：行＝test 異常サンプル、列＝入力/Teacher A_T/P1–P4/③A/③B の異常マップ A_S を1枚のグリッドに並べる。各マップは個別に [0,1] 正規化して jet 描画し、局在の再現性を条件間で見比べる。A_S は PNG からの抽出でなく各モデルを再推論して生成。
+- **前提**：`PYTHONPATH=./src`、precompute（test/）、P1–P4＋前段(P5)＋③B後段(P5B) の `best.ckpt`、GPU。③A の後段は `--p4` を凍結流用。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python bin/compare_condition_panels.py <precompute_dir> \
+    --p1 <P1>/checkpoints/best.ckpt --p2 <P2>/checkpoints/best.ckpt \
+    --p3 <P3>/checkpoints/best.ckpt --p4 <P4>/checkpoints/best.ckpt \
+    --front <P5_front>/checkpoints/best.ckpt --p5b_back <P5B_back>/checkpoints/best.ckpt \
+    --gpu 0 --num 8
+  ```
+- **出力先**：`results/distill_map/compare_conditions3_<YYYYMMDD_HHMMSS>/compare_6conditions.png` ＋ `meta.json` / `log.txt`
+- **想定時間**：数十秒（num×条件数の推論）
+
 ### scripts/compare_distillation.py — 蒸留手法の比較プロット
 
 - **目的**：`results.csv`（method, auroc, f1, memory_mb, fps）から AUROC×メモリ散布図・指標棒グラフを描く。
