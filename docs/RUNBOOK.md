@@ -215,6 +215,27 @@
 
 ---
 
+### bin/bench_networks.py — ネットワーク単位の効率ベンチマーク
+
+- **目的**：比較条件を「特徴生成ネット」「異常生成ネット」の 2 段に分解し、各ネットワークの **パラメータ数・モデルサイズ(MB) / 推論ピークVRAM(MB) / レイテンシ(ms/枚, batch=1)** を計測する。pipeline 全体ではなく段ごとの内訳を得るのが目的。
+  - T0(Teacher)=WideResNet50 embed + faiss NN 探索 / P1,P2(image_to_map)=ResNet18 backbone + FPN+head / P3,P4(feature_to_map)=WideResNet50 embed(Teacher共有) + FeatureToMap decoder
+  - faiss は torch 外メモリのため peak VRAM は計測不可 → bank index サイズ(vec×dim×4B)を `model_size_mb` に計上し `note` に明記。
+- **前提**：`PYTHONPATH=./src`、`.venv`、GPU 1 枚。Teacher フォルダと P1–P4 の `best.ckpt`。短時間ジョブ（学習なし）。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python bin/bench_networks.py --gpu 0 \
+    --teacher results/ContinualLearning/.../round_21 \
+    --p1 results/distill_map/FINAL_P1_image_normal_<ts>/checkpoints/best.ckpt \
+    --p2 results/distill_map/FINAL_P2_image_pseudo_<ts>/checkpoints/best.ckpt \
+    --p3 results/distill_map/FINAL_P3_feature_normal_<ts>/checkpoints/best.ckpt \
+    --p4 results/distill_map/FINAL_P4_feature_pseudo_<ts>/checkpoints/best.ckpt
+  ```
+- **出力先**：`results/distill_map/bench_networks_<YYYYMMDD_HHMMSS>/`
+  - `networks.csv`（段×ネットワークの全指標）/ `bench_model_size.png` / `bench_peak_vram.png` / `bench_latency.png` / `meta.json` / `log.txt`
+- **想定時間**：数十秒〜1 分（`--n` 反復回数に依存、既定 50）。
+
+---
+
 ## 比較・可視化スクリプト
 
 ### scripts/compare_distillation.py — 蒸留手法の比較プロット
