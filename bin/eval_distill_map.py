@@ -20,7 +20,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import patchcore.metrics as pmetrics
 import patchcore.runlog as runlog
 from patchcore.datasets import mvtec
-from patchcore.distill_map import feature_to_map, io_utils, student_fpn, visualize
+from patchcore.distill_map import (
+    feature_to_map,
+    image_to_feature,
+    io_utils,
+    student_fpn,
+    visualize,
+)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -28,7 +34,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def parse_args():
     p = argparse.ArgumentParser(description="Pattern B Student の評価")
     p.add_argument("targets_dir", help="precompute 出力フォルダ（test/ を含む）")
-    p.add_argument("--checkpoint", required=True, help="Student の best.ckpt")
+    p.add_argument("--checkpoint", required=True,
+                   help="Student の best.ckpt。--front_checkpoint 併用時は後段(feature_to_map)を指す")
+    p.add_argument("--front_checkpoint", default=None,
+                   help="(③) 前段 image_to_feature の best.ckpt。指定時は 前段→後段(--checkpoint) を連結評価")
     p.add_argument("--name", default="eval_S2", help="出力フォルダ接頭辞")
     p.add_argument("--gpu", type=int, default=0)
     p.add_argument("--seed", type=int, default=42)
@@ -51,10 +60,16 @@ def _anomaly_type(image_path: str) -> str:
     return parts[-2] if len(parts) >= 2 else "unknown"
 
 
+_MODULE_BY_PATTERN = {
+    "feature_to_map": feature_to_map,
+    "image_to_feature": image_to_feature,
+}
+
+
 def _load_student(checkpoint, device):
     ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
     pattern = ckpt.get("pattern", "image_to_map")
-    module = feature_to_map if pattern == "feature_to_map" else student_fpn
+    module = _MODULE_BY_PATTERN.get(pattern, student_fpn)
     student = module.build_student(**ckpt["student_kwargs"])
     student.load_state_dict(ckpt["student_state_dict"])
     student.to(device).eval()
@@ -62,6 +77,25 @@ def _load_student(checkpoint, device):
         ckpt["normalizer"]["mode"], ckpt["normalizer"]["stats"]
     )
     return student, normalizer, pattern, module
+
+
+class _ComposedFrontBack(torch.nn.Module):
+    """③連結: 画像 →[前段 image_to_feature]→ F_S →[後段 feature_to_map]→ 異常マップ。
+
+    後段は凍結（方針A）でも再学習（方針B）でも同じ IF。既存評価ループが期待する
+    ``forward(images) -> a_s`` / ``score(a_s)`` を提供する。
+    """
+
+    def __init__(self, front, back):
+        super().__init__()
+        self.front = front
+        self.back = back
+
+    def forward(self, images):
+        return self.back(self.front(images))
+
+    def score(self, a_s):
+        return self.back.score(a_s)
 
 
 @torch.no_grad()
@@ -127,9 +161,23 @@ def main():
     runlog.start_tee(run_dir)
     print(f"出力先: {run_dir}\nDevice: {device}")
 
-    student, normalizer, pattern, module = _load_student(args.checkpoint, device)
-    input_key = "teacher_feature" if pattern == "feature_to_map" else "image"
-    print(f"Student ロード: {args.checkpoint}  pattern={pattern}  normalize={normalizer.mode}")
+    if args.front_checkpoint:
+        back, normalizer, back_pattern, _ = _load_student(args.checkpoint, device)
+        front, _, front_pattern, _ = _load_student(args.front_checkpoint, device)
+        if back_pattern != "feature_to_map":
+            raise ValueError(f"--checkpoint は後段(feature_to_map)が必要: pattern={back_pattern}")
+        if front_pattern != "image_to_feature":
+            raise ValueError(f"--front_checkpoint は前段(image_to_feature)が必要: pattern={front_pattern}")
+        student = _ComposedFrontBack(front, back).to(device).eval()
+        module = student_fpn  # count_parameters/model_size_mb は汎用（合成モデル全体を集計）
+        pattern = "image_to_feature"  # 合成モデルは画像入力
+        input_key = "image"
+        print(f"③連結評価: 前段={args.front_checkpoint} → 後段={args.checkpoint}  "
+              f"normalize={normalizer.mode}（後段由来）")
+    else:
+        student, normalizer, pattern, module = _load_student(args.checkpoint, device)
+        input_key = "teacher_feature" if pattern == "feature_to_map" else "image"
+        print(f"Student ロード: {args.checkpoint}  pattern={pattern}  normalize={normalizer.mode}")
 
     base = mvtec.MVTecDataset(
         args.dataset_path, classname=args.classname, resize=args.resize,

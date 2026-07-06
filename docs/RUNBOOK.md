@@ -191,7 +191,13 @@
   PYTHONPATH=./src .venv/bin/python bin/eval_distill_map.py <precompute_dir> \
     --checkpoint <run>/checkpoints/best.ckpt --name eval_S2 --gpu 0 \
     --num_vis 8 --teacher <teacher_dir>
+  # ③A 連結評価: 前段(image_to_feature) → 後段(feature_to_map, 凍結) を連結して評価
+  PYTHONPATH=./src .venv/bin/python bin/eval_distill_map.py <precompute_dir> \
+    --checkpoint <P4_feature_to_map_run>/checkpoints/best.ckpt \
+    --front_checkpoint <P5_image_to_feature_run>/checkpoints/best.ckpt \
+    --name eval_P5A --gpu 0 --num_vis 8
   ```
+  - `--front_checkpoint` 指定時：`--checkpoint` は後段(feature_to_map)、`--front_checkpoint` は前段(image_to_feature)を指す。画像→前段→F_S→後段→異常マップ を連結し、正規化は後段由来。効率は合成モデル全体（前段+後段）を集計。方針B（後段をF_Sで再学習）でも後段ckptを差し替えるだけで同IF。
 - **出力先**：`results/distill_map/<name>_<YYYYMMDD_HHMMSS>/`
   - `metrics/{image_metrics,distillation_fidelity,efficiency_metrics}.json`
   - `predictions/scores.csv` / `roc_teacher_vs_student.png` / `visualizations/*_panel.png` / `meta.json` / `log.txt`
