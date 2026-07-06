@@ -251,9 +251,9 @@
 ### bin/bench_networks.py — ネットワーク単位の効率ベンチマーク
 
 - **目的**：比較条件を「特徴生成ネット」「異常生成ネット」の 2 段に分解し、各ネットワークの **パラメータ数・モデルサイズ(MB) / 推論ピークVRAM(MB) / レイテンシ(ms/枚, batch=1)** を計測する。pipeline 全体ではなく段ごとの内訳を得るのが目的。
-  - T0(Teacher)=WideResNet50 embed + faiss NN 探索 / P1,P2(image_to_map)=ResNet18 backbone + FPN+head / P3,P4(feature_to_map)=WideResNet50 embed(Teacher共有) + FeatureToMap decoder
+  - T0(Teacher)=WideResNet50 embed + faiss NN 探索 / P1,P2(image_to_map)=ResNet18 backbone + FPN+head / P3,P4(feature_to_map)=WideResNet50 embed(Teacher共有) + FeatureToMap decoder / ③=ResNet18-FPN 前段 + FeatureToMap decoder（`--p5_front`＋`--p5b_back`）
   - faiss は torch 外メモリのため peak VRAM は計測不可 → bank index サイズ(vec×dim×4B)を `model_size_mb` に計上し `note` に明記。
-- **前提**：`PYTHONPATH=./src`、`.venv`、GPU 1 枚。Teacher フォルダと P1–P4 の `best.ckpt`。短時間ジョブ（学習なし）。
+- **前提**：`PYTHONPATH=./src`、`.venv`、GPU 1 枚。Teacher フォルダと P1–P4 の `best.ckpt`（③は前段/後段 ckpt）。短時間ジョブ（学習なし）。
 - **コマンド例**：
   ```bash
   PYTHONPATH=./src .venv/bin/python bin/bench_networks.py --gpu 0 \
@@ -261,7 +261,9 @@
     --p1 results/distill_map/FINAL_P1_image_normal_<ts>/checkpoints/best.ckpt \
     --p2 results/distill_map/FINAL_P2_image_pseudo_<ts>/checkpoints/best.ckpt \
     --p3 results/distill_map/FINAL_P3_feature_normal_<ts>/checkpoints/best.ckpt \
-    --p4 results/distill_map/FINAL_P4_feature_pseudo_<ts>/checkpoints/best.ckpt
+    --p4 results/distill_map/FINAL_P4_feature_pseudo_<ts>/checkpoints/best.ckpt \
+    --p5_front results/distill_map/P5_image_to_feature_<ts>/checkpoints/best.ckpt \
+    --p5b_back results/distill_map/P5B_back_on_FS_<ts>/checkpoints/best.ckpt
   ```
 - **出力先**：`results/distill_map/bench_networks_<YYYYMMDD_HHMMSS>/`
   - `networks.csv`（段×ネットワークの全指標）/ `bench_model_size.png` / `bench_peak_vram.png` / `bench_latency.png` / `meta.json` / `log.txt`
@@ -270,6 +272,22 @@
 ---
 
 ## 比較・可視化スクリプト
+
+### bin/aggregate_distill_final.py — 最終比較（精度）の横断集計（T0/P1–P4/③A/③B）
+
+- **目的**：各条件の eval 出力（`metrics/image_metrics.json`・`distillation_fidelity.json`）から AUROC/AP/F1max と map_MSE/MAE を1表・1図に集約。③A/③B を P1–P4 と横並びにする。効率は段の重さを正しく数える必要があるため扱わず [bench_networks.py](bin/bench_networks.py) に委ねる。
+- **前提**：`PYTHONPATH=./src`、各条件の eval ディレクトリ（`eval_distill_map.py` が生成）。学習・GPU 不要。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python bin/aggregate_distill_final.py \
+    --run P1=<eval_FINAL_P1_...> --run P2=<eval_FINAL_P2_...> \
+    --run P3=<eval_FINAL_P3_...> --run P4=<eval_FINAL_P4_...> \
+    --run P5A=<eval_P5A_frozen_...> --run P5B=<eval_P5B_retrained_...>
+  ```
+  - `--run id=eval_dir`。id は T0/P1/P2/P3/P4/P5A(=③A)/P5B(=③B)。Teacher 行はいずれかの eval の `image_metrics["teacher"]` から自動抽出。
+- **出力先**：`results/distill_map/final_compare3_<YYYYMMDD_HHMMSS>/`
+  - `comparison.csv`（id/label/入力/学習/特徴生成/後段/auroc/ap/f1_max/map_mse/map_mae/score_spearman）/ `comparison_scores.png` / `meta.json` / `log.txt`
+- **想定時間**：数秒
 
 ### scripts/compare_distillation.py — 蒸留手法の比較プロット
 

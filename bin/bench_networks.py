@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 import patchcore.common
 import patchcore.patchcore
 import patchcore.runlog as runlog
-from patchcore.distill_map import feature_to_map, student_fpn
+from patchcore.distill_map import feature_to_map, image_to_feature, student_fpn
 
 plt.rcParams["font.family"] = "Noto Sans CJK JP"
 
@@ -43,6 +43,8 @@ def parse_args():
     p.add_argument("--p2", help="P2 image_to_map (正常+疑似) best.ckpt")
     p.add_argument("--p3", help="P3 feature_to_map (正常のみ) best.ckpt")
     p.add_argument("--p4", help="P4 feature_to_map (正常+疑似) best.ckpt")
+    p.add_argument("--p5_front", help="③ 前段 image_to_feature best.ckpt")
+    p.add_argument("--p5b_back", help="③ 後段 feature_to_map (F_Sで再学習) best.ckpt")
     p.add_argument("--gpu", type=int, default=0)
     p.add_argument("--imagesize", type=int, default=224)
     p.add_argument("--n", type=int, default=50, help="計測反復回数")
@@ -129,10 +131,16 @@ def _bench_teacher(pc, device, args):
     return feat_row, anom_row, feat_grid
 
 
+_MODULE_BY_PATTERN = {
+    "feature_to_map": feature_to_map,
+    "image_to_feature": image_to_feature,
+}
+
+
 def _load_student(checkpoint, device):
     ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
     pattern = ckpt.get("pattern", "image_to_map")
-    module = feature_to_map if pattern == "feature_to_map" else student_fpn
+    module = _MODULE_BY_PATTERN.get(pattern, student_fpn)
     student = module.build_student(**ckpt["student_kwargs"])
     student.load_state_dict(ckpt["student_state_dict"])
     student.to(device).eval()
@@ -172,6 +180,30 @@ def _bench_feature_student(cond, ckpt, device, args, feat_grid, teacher_feat_row
                   note="特徴生成はTeacherと同一backbone")
     return [
         shared,
+        _row(cond, "異常生成", "FeatureToMap decoder", anom_params, anom_size,
+             anom_vram, anom_lat),
+    ]
+
+
+def _bench_distill3(cond, front_ckpt, back_ckpt, device, args, feat_grid):
+    """③: 前段 image_to_feature(特徴生成) と 後段 feature_to_map(異常生成) に分解。"""
+    front, fp = _load_student(front_ckpt, device)
+    back, bp = _load_student(back_ckpt, device)
+    if fp != "image_to_feature":
+        raise ValueError(f"--p5_front は image_to_feature が必要: {fp}")
+    if bp != "feature_to_map":
+        raise ValueError(f"--p5b_back は feature_to_map が必要: {bp}")
+
+    x = torch.randn(1, 3, args.imagesize, args.imagesize).to(device)
+    feat_lat, feat_vram = _bench_fn(lambda: front(x), device, args.n, args.warmup)
+    feat_params, feat_size = _param_stats(front)
+
+    fg = feat_grid.to(device)
+    anom_lat, anom_vram = _bench_fn(lambda: back(fg), device, args.n, args.warmup)
+    anom_params, anom_size = _param_stats(back)
+
+    return [
+        _row(cond, "特徴生成", "ResNet18-FPN 前段", feat_params, feat_size, feat_vram, feat_lat),
         _row(cond, "異常生成", "FeatureToMap decoder", anom_params, anom_size,
              anom_vram, anom_lat),
     ]
@@ -241,6 +273,10 @@ def main():
             if ck:
                 print(f"[bench] {cond} feature_to_map: {ck}")
                 rows += _bench_feature_student(cond, ck, device, args, feat_grid, feat_row)
+
+        if args.p5_front and args.p5b_back:
+            print(f"[bench] ③ 前段={args.p5_front} 後段={args.p5b_back}")
+            rows += _bench_distill3("③", args.p5_front, args.p5b_back, device, args, feat_grid)
 
         _save_csv(rows, os.path.join(run_dir, "networks.csv"))
         _plot(rows, "model_size_mb", "モデルサイズ (MB)", "ネットワーク別 モデルサイズ",
