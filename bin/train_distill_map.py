@@ -18,7 +18,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import patchcore.runlog as runlog
 from patchcore.datasets import mvtec
-from patchcore.distill_map import feature_to_map, io_utils, student_fpn, trainer
+from patchcore.distill_map import (
+    feature_to_map,
+    image_to_feature,
+    io_utils,
+    student_fpn,
+    trainer,
+)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -30,8 +36,9 @@ def parse_args():
                    help="(S3) 疑似異常 precompute の split フォルダ（例 <run>/pseudo）。normal と結合学習")
     p.add_argument("--name", default="S2_image_to_map", help="実験名（出力フォルダ接頭辞）")
     p.add_argument("--pattern", default="image_to_map",
-                   choices=["image_to_map", "feature_to_map"],
-                   help="B=image_to_map / A=feature_to_map（precompute は --save_feature 必須）")
+                   choices=["image_to_map", "feature_to_map", "image_to_feature"],
+                   help="B=image_to_map / A=feature_to_map / ③前段=image_to_feature"
+                        "（A・③前段は precompute --save_feature 必須）")
     p.add_argument("--gpu", type=int, default=0)
     p.add_argument("--seed", type=int, default=42)
     # dataset（画像の前処理は Teacher precompute と一致させる）
@@ -48,6 +55,8 @@ def parse_args():
     p.add_argument("--reduce_channels", type=int, default=256,
                    help="Pattern A: 1x1 縮約後のチャンネル数")
     p.add_argument("--output_activation", default="none", choices=["none", "sigmoid"])
+    p.add_argument("--feat_output_activation", default="relu", choices=["none", "relu"],
+                   help="③前段(image_to_feature)の出力活性化。生F_T(post-ReLU非負)に合わせ既定relu")
     p.add_argument("--score_pooling", default="max", choices=["max", "topk_mean", "mean"])
     p.add_argument("--topk_ratio", type=float, default=0.01)
     # normalization（map/score 共通アフィン）
@@ -91,7 +100,7 @@ def main():
         imagesize=args.imagesize, split=mvtec.DatasetSplit.TRAIN, seed=args.seed,
     )
     train_targets_dir = os.path.join(args.targets_dir, "train")
-    load_feature = args.pattern == "feature_to_map"
+    load_feature = args.pattern in ("feature_to_map", "image_to_feature")
     normal_ds = io_utils.TeacherTargetDataset(base, train_targets_dir, load_feature=load_feature)
     stat_sources = [normal_ds]
     if args.pseudo_dir:
@@ -115,7 +124,21 @@ def main():
         target_map_size=args.imagesize, output_activation=args.output_activation,
         score_pooling=args.score_pooling, topk_ratio=args.topk_ratio,
     )
-    if args.pattern == "feature_to_map":
+    if args.pattern == "image_to_feature":
+        feat = dataset[0]["teacher_feature"]  # [C,H',W']
+        c_out, h_feat = int(feat.shape[0]), int(feat.shape[1])
+        student_kwargs = dict(
+            out_channels=c_out, target_feat_size=h_feat,
+            pretrained=args.pretrained, freeze_backbone=args.freeze_backbone,
+            fpn_out_channels=args.fpn_out_channels, decoder_channels=args.decoder_channels,
+            output_activation=args.feat_output_activation,
+        )
+        args.input_key = "image"
+        student = image_to_feature.build_student(**student_kwargs)
+        n_params = image_to_feature.count_parameters(student)
+        print(f"③前段 image→feature: out_ch={c_out} 格子={h_feat}x{h_feat} "
+              f"act={args.feat_output_activation}")
+    elif args.pattern == "feature_to_map":
         feat = dataset[0]["teacher_feature"]  # [C,H',W']
         c_in, h_feat = int(feat.shape[0]), int(feat.shape[1])
         num_up = max(1, round(math.log2(args.imagesize / h_feat)))

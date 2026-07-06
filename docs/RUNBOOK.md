@@ -153,6 +153,13 @@
   ```
   - `--pattern feature_to_map` は backbone なしで F_T→A_S を学習（軽量）。eval は checkpoint の pattern を自動判別。
   ```bash
+  # ③前段: Pattern image_to_feature = 画像→Teacher特徴 F_T を MSE 回帰（precompute は --save_feature 必須）
+  PYTHONPATH=./src .venv/bin/python bin/train_distill_map.py <normal_precompute_dir> \
+    --pseudo_dir <pseudo_precompute_dir>/pseudo \
+    --name P5_image_to_feature --pattern image_to_feature --gpu 0 --epochs 100 --batch_size 32
+  ```
+  - `--pattern image_to_feature`（③前段）：画像→`[C,H',W']` 特徴を **生F_T へ直接 MSE 回帰**（map/score 損失は不使用、`--normalize` 無関係）。出力活性化は `--feat_output_activation`（既定 `relu`＝post-ReLU 非負 F_T に整合）。学習曲線は feat MSE を描画。出力仕様は ②後段 `feature_to_map`（in_channels=1024・格子28×28）と一致し、凍結再利用（方針A）できる。
+  ```bash
   # S3: normal + pseudo anomaly 結合学習（--pseudo_dir に pseudo precompute の split を渡す）
   PYTHONPATH=./src .venv/bin/python bin/train_distill_map.py <normal_precompute_dir> \
     --pseudo_dir <pseudo_precompute_dir>/pseudo --name S3_image_to_map --gpu 0 --epochs 30

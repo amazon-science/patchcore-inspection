@@ -12,6 +12,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from patchcore.distill_map import io_utils
@@ -33,21 +34,28 @@ def split_train_val(dataset, val_ratio: float, seed: int):
 
 
 def _run_epoch(student, loader, crit, normalizer, device, optimizer=None, scaler=None,
-               input_key="image"):
+               input_key="image", feature_mode=False):
     train = optimizer is not None
     student.train(train)
-    totals = {"loss": 0.0, "map": 0.0, "score": 0.0}
+    totals = {"loss": 0.0, "feat": 0.0} if feature_mode else {"loss": 0.0, "map": 0.0, "score": 0.0}
     n = 0
     for batch in loader:
         images = batch[input_key].to(device, non_blocking=True)
-        a_t = normalizer.apply(batch["teacher_map"].to(device, non_blocking=True))
-        s_t = normalizer.apply(batch["teacher_score"].to(device, non_blocking=True))
         bs = images.shape[0]
         with torch.set_grad_enabled(train):
             with torch.autocast("cuda", enabled=scaler is not None):
-                a_s = student(images)
-                s_s = student.score(a_s)
-                loss, logs = crit(a_s, a_t, s_s, s_t)
+                if feature_mode:
+                    # ③前段: 画像 → 生F_T を MSE 回帰（正規化なし・relu 出力）
+                    f_t = batch["teacher_feature"].to(device, non_blocking=True)
+                    f_s = student(images)
+                    loss = F.mse_loss(f_s, f_t)
+                    logs = {"loss": float(loss), "feat": float(loss)}
+                else:
+                    a_t = normalizer.apply(batch["teacher_map"].to(device, non_blocking=True))
+                    s_t = normalizer.apply(batch["teacher_score"].to(device, non_blocking=True))
+                    a_s = student(images)
+                    s_s = student.score(a_s)
+                    loss, logs = crit(a_s, a_t, s_s, s_t)
         if train:
             optimizer.zero_grad(set_to_none=True)
             if scaler is not None:
@@ -66,11 +74,16 @@ def _run_epoch(student, loader, crit, normalizer, device, optimizer=None, scaler
 def _plot_curve(history, out_path):
     epochs = [h["epoch"] for h in history]
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.plot(epochs, [h["train_loss"] for h in history], label="train total")
-    ax.plot(epochs, [h["train_map"] for h in history], label="train map", ls="--")
-    ax.plot(epochs, [h["train_score"] for h in history], label="train score", ls=":")
-    if history[0].get("val_loss") is not None:
-        ax.plot(epochs, [h["val_loss"] for h in history], label="val total", color="k")
+    if "train_feat" in history[0]:
+        ax.plot(epochs, [h["train_feat"] for h in history], label="train feat MSE")
+        if history[0].get("val_feat") is not None:
+            ax.plot(epochs, [h["val_feat"] for h in history], label="val feat MSE", color="k")
+    else:
+        ax.plot(epochs, [h["train_loss"] for h in history], label="train total")
+        ax.plot(epochs, [h["train_map"] for h in history], label="train map", ls="--")
+        ax.plot(epochs, [h["train_score"] for h in history], label="train score", ls=":")
+        if history[0].get("val_loss") is not None:
+            ax.plot(epochs, [h["val_loss"] for h in history], label="val total", color="k")
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
     ax.set_title("蒸留学習曲線")
@@ -96,6 +109,7 @@ def train_student(student, full_dataset, normalizer, device, args, run_dir):
     print(f"train={len(train_set)}  val={len(val_set) if val_set else 0}")
 
     input_key = getattr(args, "input_key", "image")
+    feature_mode = getattr(args, "pattern", "image_to_map") == "image_to_feature"
     student.to(device)
     crit = DistillLoss(
         map_loss_kind=args.map_loss,
@@ -129,24 +143,34 @@ def train_student(student, full_dataset, normalizer, device, args, run_dir):
 
     for epoch in range(1, args.epochs + 1):
         tr = _run_epoch(student, train_loader, crit, normalizer, device,
-                        optimizer=optimizer, scaler=scaler, input_key=input_key)
+                        optimizer=optimizer, scaler=scaler, input_key=input_key,
+                        feature_mode=feature_mode)
         va = (_run_epoch(student, val_loader, crit, normalizer, device,
-                         input_key=input_key)
+                         input_key=input_key, feature_mode=feature_mode)
               if val_loader is not None else None)
         scheduler.step()
-        row = {
-            "epoch": epoch, "lr": optimizer.param_groups[0]["lr"],
-            "train_loss": tr["loss"], "train_map": tr["map"], "train_score": tr["score"],
-            "val_loss": va["loss"] if va else None,
-            "val_map": va["map"] if va else None,
-            "val_score": va["score"] if va else None,
-        }
+        if feature_mode:
+            row = {
+                "epoch": epoch, "lr": optimizer.param_groups[0]["lr"],
+                "train_loss": tr["loss"], "train_feat": tr["feat"],
+                "val_loss": va["loss"] if va else None,
+                "val_feat": va["feat"] if va else None,
+            }
+            msg = f"[{epoch:3d}/{args.epochs}] train feat MSE={tr['feat']:.5f}"
+        else:
+            row = {
+                "epoch": epoch, "lr": optimizer.param_groups[0]["lr"],
+                "train_loss": tr["loss"], "train_map": tr["map"], "train_score": tr["score"],
+                "val_loss": va["loss"] if va else None,
+                "val_map": va["map"] if va else None,
+                "val_score": va["score"] if va else None,
+            }
+            msg = (f"[{epoch:3d}/{args.epochs}] train={tr['loss']:.4f} "
+                   f"(map={tr['map']:.4f} score={tr['score']:.4f})")
         history.append(row)
         monitor = va["loss"] if va else tr["loss"]
-        msg = (f"[{epoch:3d}/{args.epochs}] train={tr['loss']:.4f} "
-               f"(map={tr['map']:.4f} score={tr['score']:.4f})")
         if va:
-            msg += f"  val={va['loss']:.4f}"
+            msg += f"  val={va['loss']:.5f}" if feature_mode else f"  val={va['loss']:.4f}"
         torch.save(_ckpt_payload(), os.path.join(ckpt_dir, "last.ckpt"))
         if monitor < best_metric - 1e-6:
             best_metric = monitor
