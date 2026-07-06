@@ -61,6 +61,8 @@ def _process(front, dataset, device, split_dir, args):
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
                         num_workers=args.num_workers)
     limit = args.max_per_split or len(dataset)
+    scores_all = []
+    feat_shape = None
     done = 0
     for batch in loader:
         if done >= limit:
@@ -86,9 +88,22 @@ def _process(front, dataset, device, split_dir, args):
                 "teacher_feature_map": f_s[i].half(),  # ← F_S を格納
             }
             torch.save(record, os.path.join(split_dir, sids[i] + ".pt"))
+            scores_all.append(float(scores[i]))
+            if feat_shape is None:
+                feat_shape = list(f_s[i].shape)
             done += 1
         print(f"  [{os.path.basename(split_dir)}] {done}/{limit} 枚保存", flush=True)
-    return done
+    import numpy as np
+    arr = np.asarray(scores_all, dtype=np.float64)
+    split_stats = {
+        "count": int(len(scores_all)),
+        "feature_shape": feat_shape,
+        "score_mean": float(arr.mean()) if len(arr) else None,
+        "score_std": float(arr.std()) if len(arr) else None,
+        "score_min": float(arr.min()) if len(arr) else None,
+        "score_max": float(arr.max()) if len(arr) else None,
+    }
+    return done, split_stats
 
 
 def main():
@@ -109,7 +124,9 @@ def main():
     normal = io_utils.TeacherTargetDataset(
         base, os.path.join(args.targets_dir, "train"), load_feature=False,
     )
-    n_normal = _process(front, normal, device, os.path.join(run_dir, "train"), args)
+    stats_json = {}
+    n_normal, stats_json["train"] = _process(
+        front, normal, device, os.path.join(run_dir, "train"), args)
     print(f"正常 F_S 保存: {n_normal} 枚")
 
     n_pseudo = 0
@@ -117,8 +134,14 @@ def main():
         pseudo = io_utils.DirectImageTargetDataset(
             args.pseudo_dir, resize=args.resize, imagesize=args.imagesize, load_feature=False,
         )
-        n_pseudo = _process(front, pseudo, device, os.path.join(run_dir, "pseudo"), args)
+        n_pseudo, stats_json["pseudo"] = _process(
+            front, pseudo, device, os.path.join(run_dir, "pseudo"), args)
         print(f"疑似 F_S 保存: {n_pseudo} 枚")
+
+    # fit_score_stats の高速経路（.pt を読まない）用に stats.json を残す
+    import json
+    with open(os.path.join(run_dir, "stats.json"), "w") as f:
+        json.dump(stats_json, f, ensure_ascii=False, indent=2)
 
     runlog.write_meta(run_dir, extra={
         "front_checkpoint": args.front_checkpoint, "targets_dir": args.targets_dir,
