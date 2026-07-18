@@ -5,9 +5,11 @@ Student 学習・評価から共通利用する。画像は既存 MVTecDataset �
 （設計書 §21.1）。
 """
 import glob
+import json
 import os
 import re
 
+import numpy as np
 import PIL.Image
 import torch
 from torch.utils.data import Dataset
@@ -169,13 +171,26 @@ def _dataset_scores(dataset):
     ]
 
 
+def _packed_stats(dataset):
+    """PackedTargetDataset（get_scores を持つ）から統計を返す。無ければ None。"""
+    if not hasattr(dataset, "get_scores"):
+        return None
+    s = np.asarray(dataset.get_scores(), dtype=np.float64)
+    if s.size == 0:
+        return None
+    return {"count": int(s.size), "mean": float(s.mean()), "std": float(s.std()),
+            "min": float(s.min()), "max": float(s.max())}
+
+
 def _split_stats_from_json(dataset):
     """dataset.dir に対応する precompute の stats.json から split 統計を返す。
 
     見つからなければ None。allfeat（特徴入りで .pt が巨大）でも .pt を読まずに
     正規化統計を得るための高速経路。
     """
-    import json
+    packed = _packed_stats(dataset)
+    if packed is not None:
+        return packed
     run_root = os.path.dirname(os.path.normpath(dataset.dir))
     split = os.path.basename(os.path.normpath(dataset.dir))
     path = os.path.join(run_root, "stats.json")
@@ -251,3 +266,156 @@ class TargetNormalizer:
 
     def to_dict(self):
         return {"mode": self.mode, "stats": self.stats}
+
+
+# ---------------------------------------------------------------------------
+# 高速化：packed memmap 保存/読み込み・正常の RAM 常駐
+# （[[pseudo-anomaly-scale-experiment]] の A2/B1）。
+# ---------------------------------------------------------------------------
+
+_NORM_MEAN_T = torch.tensor(IMAGENET_MEAN).view(3, 1, 1)
+_NORM_STD_T = torch.tensor(IMAGENET_STD).view(3, 1, 1)
+PACK_MARKER = "packed_meta.json"
+
+
+class PackedWriter:
+    """Student target を packed memmap にストリーミング書き込みする。
+
+    数百万サンプルでも per-file ``.pt`` を作らず、``images``(uint8, resize+crop 済み) /
+    ``features``(fp16) / ``targets``(fp16 異常マップ) / ``scores`` / ``labels`` を
+    事前確保した memmap に 1 サンプルずつ書く。学習時は :class:`PackedTargetDataset`。
+    """
+
+    def __init__(self, out_dir, count, imagesize, map_size, save_image=True,
+                 feature_shape=None):
+        os.makedirs(out_dir, exist_ok=True)
+        self.dir = out_dir
+        self.count = int(count)
+        self.imagesize = int(imagesize)
+        self.map_size = [int(map_size[0]), int(map_size[1])]
+        self.save_image = save_image
+        self.feature_shape = list(feature_shape) if feature_shape else None
+        self.images = (np.lib.format.open_memmap(
+            os.path.join(out_dir, "images.npy"), mode="w+", dtype=np.uint8,
+            shape=(self.count, 3, self.imagesize, self.imagesize)) if save_image else None)
+        self.features = (np.lib.format.open_memmap(
+            os.path.join(out_dir, "features.npy"), mode="w+", dtype=np.float16,
+            shape=(self.count, *self.feature_shape)) if self.feature_shape else None)
+        self.targets = np.lib.format.open_memmap(
+            os.path.join(out_dir, "targets.npy"), mode="w+", dtype=np.float16,
+            shape=(self.count, self.map_size[0], self.map_size[1]))
+        self.scores = np.lib.format.open_memmap(
+            os.path.join(out_dir, "scores.npy"), mode="w+", dtype=np.float32,
+            shape=(self.count,))
+        self.labels = np.lib.format.open_memmap(
+            os.path.join(out_dir, "labels.npy"), mode="w+", dtype=np.int8,
+            shape=(self.count,))
+        self._paths = []
+
+    def write(self, i, target, score, label, image=None, feature=None, image_path=None):
+        if self.images is not None and image is not None:
+            self.images[i] = np.asarray(image, dtype=np.uint8)
+        if self.features is not None and feature is not None:
+            self.features[i] = np.asarray(feature, dtype=np.float16)
+        self.targets[i] = np.asarray(target, dtype=np.float16)
+        self.scores[i] = float(score)
+        self.labels[i] = int(label)
+        self._paths.append(image_path or "")
+
+    def close(self, extra_meta=None):
+        for a in (self.images, self.features, self.targets, self.scores, self.labels):
+            if a is not None:
+                a.flush()
+        s = self.scores.astype(np.float64)
+        meta = {
+            "count": self.count, "imagesize": self.imagesize, "map_size": self.map_size,
+            "save_image": bool(self.images is not None),
+            "feature_shape": self.feature_shape,
+            "score_mean": float(s.mean()) if len(s) else None,
+            "score_std": float(s.std()) if len(s) else None,
+            "score_min": float(s.min()) if len(s) else None,
+            "score_max": float(s.max()) if len(s) else None,
+            "n_anomaly": int((self.labels[:] == 1).sum()),
+        }
+        if extra_meta:
+            meta.update(extra_meta)
+        with open(os.path.join(self.dir, PACK_MARKER), "w") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        with open(os.path.join(self.dir, "image_paths.txt"), "w") as f:
+            f.write("\n".join(self._paths))
+        return meta
+
+
+def is_packed(path):
+    return os.path.isfile(os.path.join(path, PACK_MARKER))
+
+
+class PackedTargetDataset(Dataset):
+    """:class:`PackedWriter` が書いた packed memmap を Student 学習で読む。
+
+    返り値は :class:`TeacherTargetDataset` と同一キー。``in_memory=True`` で全 memmap を
+    RAM に載せる（正常など少数を常駐させ IO を消す）。
+    """
+
+    def __init__(self, folder, load_feature=False, in_memory=False):
+        self.dir = folder
+        with open(os.path.join(folder, PACK_MARKER)) as f:
+            self.meta = json.load(f)
+        self.load_feature = load_feature
+        mmap = None if in_memory else "r"
+        self.targets = np.load(os.path.join(folder, "targets.npy"), mmap_mode=mmap)
+        self.scores = np.load(os.path.join(folder, "scores.npy"), mmap_mode=mmap)
+        self.labels = np.load(os.path.join(folder, "labels.npy"), mmap_mode=mmap)
+        self.images = (np.load(os.path.join(folder, "images.npy"), mmap_mode=mmap)
+                       if self.meta.get("save_image") else None)
+        self.features = (np.load(os.path.join(folder, "features.npy"), mmap_mode=mmap)
+                         if load_feature and self.meta.get("feature_shape") else None)
+        self.count = int(self.meta["count"])
+        # fit_score_stats / 互換のため items=(idx, sid) を用意
+        self.items = [(i, f"packed_{i:08d}") for i in range(self.count)]
+
+    def __len__(self):
+        return self.count
+
+    def get_scores(self):
+        return np.asarray(self.scores)
+
+    def __getitem__(self, j):
+        amap = torch.from_numpy(np.array(self.targets[j], dtype=np.float32)).unsqueeze(0)
+        out = {
+            "teacher_map": amap,
+            "teacher_score": torch.tensor(float(self.scores[j]), dtype=torch.float32),
+            "label": int(self.labels[j]),
+            "sample_id": f"packed_{j:08d}",
+            "image_path": f"{self.dir}#packed_{j:08d}",
+        }
+        if self.images is not None:
+            img = torch.from_numpy(np.array(self.images[j], dtype=np.float32)).div_(255.0)
+            out["image"] = (img - _NORM_MEAN_T) / _NORM_STD_T
+        if self.features is not None:
+            out["teacher_feature"] = torch.from_numpy(
+                np.array(self.features[j], dtype=np.float32))
+        return out
+
+
+class InMemoryCacheDataset(Dataset):
+    """任意 dataset の全サンプルを一度だけ __getitem__ して RAM に常駐させる。
+
+    正常（少数）を常駐させ、1:1 サンプラで毎バッチ引かれる正常側の IO を消す（B1）。
+    """
+
+    def __init__(self, base, verbose=True):
+        self.base = base
+        self.dir = getattr(base, "dir", None)
+        self.items = getattr(base, "items", None)
+        if verbose:
+            print(f"正常常駐キャッシュ構築: {len(base)} 件を RAM へ...", flush=True)
+        self.cache = [base[i] for i in range(len(base))]
+        if verbose:
+            print("正常常駐キャッシュ完了", flush=True)
+
+    def __len__(self):
+        return len(self.cache)
+
+    def __getitem__(self, j):
+        return self.cache[j]

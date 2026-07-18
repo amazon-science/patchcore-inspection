@@ -81,6 +81,8 @@ def parse_args():
                    help="過学習ギャップ用に評価する train 正常の枚数")
     p.add_argument("--channels_last", type=int, default=1, help="channels_last メモリ形式（CUDA）")
     p.add_argument("--prefetch_factor", type=int, default=4)
+    p.add_argument("--cache_normal", type=int, default=1,
+                   help="正常 target を RAM 常駐させ 1:1 の正常側 IO を消す（B1）")
     p.add_argument("--amp", type=int, default=1)
     p.add_argument("--early_stopping", type=int, default=1)
     p.add_argument("--patience", type=int, default=20)
@@ -113,19 +115,28 @@ def main():
     stat_sources = [normal_ds]
     pseudo_ds = None
     if args.pseudo_dir:
-        pseudo_ds = io_utils.DirectImageTargetDataset(
-            args.pseudo_dir, resize=args.resize, imagesize=args.imagesize,
-            load_feature=load_feature,
-        )
+        if io_utils.is_packed(args.pseudo_dir):
+            pseudo_ds = io_utils.PackedTargetDataset(
+                args.pseudo_dir, load_feature=load_feature, in_memory=False)
+            print(f"pseudo: packed memmap を使用（{len(pseudo_ds)} 枚）")
+        else:
+            pseudo_ds = io_utils.DirectImageTargetDataset(
+                args.pseudo_dir, resize=args.resize, imagesize=args.imagesize,
+                load_feature=load_feature,
+            )
         stat_sources.append(pseudo_ds)
         print(f"学習サンプル: normal {len(normal_ds)} + pseudo {len(pseudo_ds)} 枚"
               f"（pattern={args.pattern}）")
     else:
         print(f"学習サンプル: normal {len(normal_ds)} 枚（targets={train_targets_dir}, pattern={args.pattern}）")
 
-    # feature shape 参照用（normal 側で十分）
-    dataset = normal_ds
+    # 正規化統計は cache 前の元 dataset（stat_sources）から算出する
     score_stats = io_utils.fit_score_stats(stat_sources)
+
+    # 正常を RAM 常駐（1:1 の正常側 IO を消す）。feature shape 参照にも使う
+    if args.cache_normal:
+        normal_ds = io_utils.InMemoryCacheDataset(normal_ds)
+    dataset = normal_ds
     normalizer = io_utils.TargetNormalizer(args.normalize, score_stats)
     print(f"normalize={args.normalize}  stats={score_stats}")
 
