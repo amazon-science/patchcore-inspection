@@ -12,7 +12,6 @@ import sys
 
 import numpy as np
 import torch
-from torch.utils.data import ConcatDataset
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
@@ -72,7 +71,16 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--learning_rate", type=float, default=1e-4)
     p.add_argument("--weight_decay", type=float, default=1e-4)
-    p.add_argument("--val_ratio", type=float, default=0.05)
+    p.add_argument("--val_ratio", type=float, default=0.05,
+                   help="normal/pseudo それぞれの hold-out（未使用・非オーバーサンプル）割合")
+    p.add_argument("--normal_pseudo_ratio", type=float, default=1.0,
+                   help="バッチ内 normal:pseudo をこの比(=r:1)に保つ（1.0=1:1）。pseudo使用時のみ")
+    p.add_argument("--steps_per_epoch", type=int, default=0,
+                   help=">0 で1epochのステップ数を固定（正常の過反復による肥大化を抑制）")
+    p.add_argument("--probe_size", type=int, default=2000,
+                   help="過学習ギャップ用に評価する train 正常の枚数")
+    p.add_argument("--channels_last", type=int, default=1, help="channels_last メモリ形式（CUDA）")
+    p.add_argument("--prefetch_factor", type=int, default=4)
     p.add_argument("--amp", type=int, default=1)
     p.add_argument("--early_stopping", type=int, default=1)
     p.add_argument("--patience", type=int, default=20)
@@ -103,19 +111,20 @@ def main():
     load_feature = args.pattern in ("feature_to_map", "image_to_feature")
     normal_ds = io_utils.TeacherTargetDataset(base, train_targets_dir, load_feature=load_feature)
     stat_sources = [normal_ds]
+    pseudo_ds = None
     if args.pseudo_dir:
         pseudo_ds = io_utils.DirectImageTargetDataset(
             args.pseudo_dir, resize=args.resize, imagesize=args.imagesize,
             load_feature=load_feature,
         )
-        dataset = ConcatDataset([normal_ds, pseudo_ds])
         stat_sources.append(pseudo_ds)
-        print(f"学習サンプル: normal {len(normal_ds)} + pseudo {len(pseudo_ds)} = {len(dataset)} 枚"
+        print(f"学習サンプル: normal {len(normal_ds)} + pseudo {len(pseudo_ds)} 枚"
               f"（pattern={args.pattern}）")
     else:
-        dataset = normal_ds
-        print(f"学習サンプル: {len(dataset)} 枚（targets={train_targets_dir}, pattern={args.pattern}）")
+        print(f"学習サンプル: normal {len(normal_ds)} 枚（targets={train_targets_dir}, pattern={args.pattern}）")
 
+    # feature shape 参照用（normal 側で十分）
+    dataset = normal_ds
     score_stats = io_utils.fit_score_stats(stat_sources)
     normalizer = io_utils.TargetNormalizer(args.normalize, score_stats)
     print(f"normalize={args.normalize}  stats={score_stats}")
@@ -165,7 +174,8 @@ def main():
     with open(os.path.join(run_dir, "config.json"), "w") as f:
         json.dump({k: v for k, v in vars(args).items()}, f, ensure_ascii=False, indent=2)
 
-    result = trainer.train_student(student, dataset, normalizer, device, args, run_dir)
+    result = trainer.train_student(student, normal_ds, normalizer, device, args, run_dir,
+                                   pseudo_ds=pseudo_ds)
 
     runlog.write_meta(run_dir, extra={
         "name": args.name, "targets_dir": args.targets_dir, "seed": args.seed,
