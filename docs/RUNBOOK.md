@@ -191,13 +191,22 @@
 
 ### scripts/generate_pseudo_anomalies.py — 疑似異常画像の生成（S3 用）
 
-- **目的**：正常画像に合成欠陥（scratch/spot/particle/contamination/brightness/blur/cutpaste）を載せた疑似異常画像とマスクを生成。後段で Teacher precompute → Student 蒸留学習（normal+pseudo）に使う。
-- **前提**：`PYTHONPATH=./src`。GPU 不要。`src/patchcore/distill_map/pseudo_anomaly.py` を利用（cv2 があれば高品質、無ければ numpy フォールバック）。
+- **目的**：正常画像に合成欠陥（scratch/spot/particle/contamination/brightness/blur/cutpaste/**blob**）を載せた疑似異常画像とマスクを生成。後段で Teacher precompute → Student 蒸留学習（normal+pseudo）に使う。
+- **前提**：`PYTHONPATH=./src`。GPU 不要。`src/patchcore/distill_map/pseudo_anomaly.py` を利用（`blob` は PIL.ImageDraw で cv2 非依存。既存 7 種は cv2 があれば高品質、無ければ numpy フォールバック）。
 - **コマンド例**：
   ```bash
+  # 既存 7 種を混合生成
   PYTHONPATH=./src .venv/bin/python scripts/generate_pseudo_anomalies.py \
     --num 1000 --seed 0
+
+  # blob（雑な図形の大量描画）単独生成。サイズ・個数の上限を制御（スケール実験 S3 用）
+  PYTHONPATH=./src .venv/bin/python scripts/generate_pseudo_anomalies.py \
+    --num 1000 --seed 0 --types blob \
+    --blob_count_min 3 --blob_count_max 15 \
+    --blob_size_min 0.02 --blob_size_max 0.30 \
+    --blob_shapes tri rect penta hexa circle ellipse
   ```
+  - `blob`：単色の三角/矩形/五角/六角/円/楕円を 1 画像に `[count_min,count_max]` 個、短辺比 `[size_min,size_max]` のサイズでランダム描画。マスクは描画領域。`blob_cfg` は meta.json に記録。
 - **出力先**：`results/distill_map/pseudo/<YYYYMMDD_HHMMSS>/`
   - `anomaly/*.png` / `masks/*.png` / `pseudo_sanity.png` / `meta.json` / `log.txt`
 - **想定時間**：1,000 枚で数十秒

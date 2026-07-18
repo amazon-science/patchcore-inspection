@@ -32,6 +32,17 @@ def parse_args():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--save_size", type=int, default=256, help="保存解像度（precompute の resize に合わせる）")
     p.add_argument("--types", nargs="+", default=list(PA.ANOMALY_TYPES), choices=list(PA.ANOMALY_TYPES))
+    # blob（雑な図形描画）のサイズ・個数のランダム上限。--types blob 単独運用を想定。
+    p.add_argument("--blob_count_min", type=int, default=PA.DEFAULT_BLOB_CFG["count_min"],
+                   help="1画像あたり図形数の下限")
+    p.add_argument("--blob_count_max", type=int, default=PA.DEFAULT_BLOB_CFG["count_max"],
+                   help="1画像あたり図形数の上限")
+    p.add_argument("--blob_size_min", type=float, default=PA.DEFAULT_BLOB_CFG["size_min"],
+                   help="図形サイズ下限（短辺に対する比 0-1）")
+    p.add_argument("--blob_size_max", type=float, default=PA.DEFAULT_BLOB_CFG["size_max"],
+                   help="図形サイズ上限（短辺に対する比 0-1）")
+    p.add_argument("--blob_shapes", nargs="+", default=list(PA.BLOB_SHAPES),
+                   choices=list(PA.BLOB_SHAPES), help="使用する図形の集合")
     p.add_argument("--out", default=os.path.join(REPO_ROOT, "results", "distill_map", "pseudo"))
     return p.parse_args()
 
@@ -59,6 +70,12 @@ def main():
         raise RuntimeError(f"正常画像が見つかりません: {args.source_dir}")
     print(f"ソース正常画像: {len(sources)} 枚 → 疑似異常 {args.num} 枚生成")
 
+    blob_cfg = {
+        "count_min": args.blob_count_min, "count_max": args.blob_count_max,
+        "size_min": args.blob_size_min, "size_max": args.blob_size_max,
+        "shapes": tuple(args.blob_shapes),
+    }
+
     pick = rng.integers(0, len(sources), size=args.num)
     type_counts = {}
     samples = []
@@ -67,7 +84,7 @@ def main():
             (args.save_size, args.save_size), PIL.Image.BILINEAR
         )
         arr = np.asarray(img, dtype=np.uint8)
-        pseudo, mask, kind = PA.generate(arr, rng, types=tuple(args.types))
+        pseudo, mask, kind = PA.generate(arr, rng, types=tuple(args.types), blob_cfg=blob_cfg)
         type_counts[kind] = type_counts.get(kind, 0) + 1
         sid = f"pseudo_{i:06d}"
         PIL.Image.fromarray(pseudo).save(os.path.join(anom_dir, sid + ".png"))
@@ -96,6 +113,7 @@ def main():
     runlog.write_meta(run_dir, extra={
         "source_dir": args.source_dir, "num": args.num, "seed": args.seed,
         "save_size": args.save_size, "types": args.types, "type_counts": type_counts,
+        "blob_cfg": blob_cfg,
     })
     print(f"完了: {run_dir}")
 

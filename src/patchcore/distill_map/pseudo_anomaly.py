@@ -7,6 +7,8 @@ CutPaste（自己パッチ貼付）を実装する。numpy uint8 HWC 上で動�
 乱数は呼び出し側から ``numpy.random.Generator`` を渡す（再現性のため）。
 """
 import numpy as np
+import PIL.Image
+import PIL.ImageDraw
 
 try:
     import cv2  # 線・楕円・ブラー描画に使用（無ければ簡易版にフォールバック）
@@ -16,7 +18,19 @@ except Exception:  # pragma: no cover
 
 ANOMALY_TYPES = (
     "scratch", "spot", "particle", "contamination", "brightness", "blur", "cutpaste",
+    "blob",
 )
+
+# blob（雑な図形の大量描画）の既定設定。サイズは短辺に対する比。
+BLOB_SHAPES = ("tri", "rect", "penta", "hexa", "circle", "ellipse")
+DEFAULT_BLOB_CFG = {
+    "count_min": 3,
+    "count_max": 15,
+    "size_min": 0.02,
+    "size_max": 0.30,
+    "shapes": BLOB_SHAPES,
+}
+_REGULAR_NVERTS = {"tri": 3, "penta": 5, "hexa": 6}
 
 
 def _rand_color(rng):
@@ -124,6 +138,57 @@ def _cutpaste(img, rng):
     return img, mask
 
 
+def _shape_vertices(shape, cx, cy, r, ang0, rng):
+    """図形の頂点列（回転込み）を返す。円/楕円は多角形近似（回転可能）。"""
+    if shape in ("circle", "ellipse"):
+        rx = r
+        ry = r if shape == "circle" else max(1, int(r * rng.uniform(0.3, 1.0)))
+        m = 24
+        ca, sa = np.cos(ang0), np.sin(ang0)
+        pts = []
+        for k in range(m):
+            t = 2 * np.pi * k / m
+            ex, ey = rx * np.cos(t), ry * np.sin(t)
+            pts.append((cx + ex * ca - ey * sa, cy + ex * sa + ey * ca))
+        return pts
+    if shape == "rect":
+        rx = r
+        ry = max(1, int(r * rng.uniform(0.3, 1.0)))
+        base = [(-rx, -ry), (rx, -ry), (rx, ry), (-rx, ry)]
+        ca, sa = np.cos(ang0), np.sin(ang0)
+        return [(cx + x * ca - y * sa, cy + x * sa + y * ca) for x, y in base]
+    n = _REGULAR_NVERTS[shape]
+    return [(cx + r * np.cos(ang0 + 2 * np.pi * k / n),
+             cy + r * np.sin(ang0 + 2 * np.pi * k / n)) for k in range(n)]
+
+
+def _blob(img, rng, cfg=None):
+    """雑な合成欠陥：単色の多角形/円/楕円をランダムに複数描画する。
+
+    サイズ・個数のランダム上限は ``cfg``（DEFAULT_BLOB_CFG を上書き）で制御する。
+    PIL.ImageDraw で塗るため cv2 非依存。
+    """
+    cfg = {**DEFAULT_BLOB_CFG, **(cfg or {})}
+    h, w = img.shape[:2]
+    short = min(h, w)
+    shapes = tuple(cfg["shapes"])
+    pim = PIL.Image.fromarray(img)
+    mim = PIL.Image.fromarray(np.zeros((h, w), np.uint8))
+    dimg = PIL.ImageDraw.Draw(pim)
+    dmask = PIL.ImageDraw.Draw(mim)
+    n = int(rng.integers(cfg["count_min"], cfg["count_max"] + 1))
+    for _ in range(n):
+        shape = shapes[int(rng.integers(0, len(shapes)))]
+        r = max(1, int(rng.uniform(cfg["size_min"], cfg["size_max"]) * short))
+        cx, cy = int(rng.integers(0, w)), int(rng.integers(0, h))
+        color = _rand_color(rng)
+        ang0 = float(rng.uniform(0, 2 * np.pi))
+        pts = [(int(x), int(y)) for x, y in _shape_vertices(shape, cx, cy, r, ang0, rng)]
+        dimg.polygon(pts, fill=color)
+        dmask.polygon(pts, fill=255)
+    return np.asarray(pim).copy(), np.asarray(mim).copy()
+
+
 _GENERATORS = {
     "scratch": lambda img, rng: _scratch(img, rng),
     "spot": lambda img, rng: _ellipse(img, rng),
@@ -135,9 +200,15 @@ _GENERATORS = {
 }
 
 
-def generate(image: np.ndarray, rng, types=ANOMALY_TYPES):
-    """正常画像 [H,W,3] uint8 に疑似異常を 1 種付与し (疑似画像, マスク) を返す。"""
+def generate(image: np.ndarray, rng, types=ANOMALY_TYPES, blob_cfg=None):
+    """正常画像 [H,W,3] uint8 に疑似異常を 1 種付与し (疑似画像, マスク) を返す。
+
+    ``blob_cfg`` は ``blob`` タイプのサイズ・個数上限等（DEFAULT_BLOB_CFG を上書き）。
+    """
     img = image.copy()
     kind = types[int(rng.integers(0, len(types)))]
-    img, mask = _GENERATORS[kind](img, rng)
+    if kind == "blob":
+        img, mask = _blob(img, rng, blob_cfg)
+    else:
+        img, mask = _GENERATORS[kind](img, rng)
     return img, mask, kind
