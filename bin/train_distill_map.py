@@ -33,6 +33,8 @@ def parse_args():
     p.add_argument("targets_dir", help="precompute 出力フォルダ（train/ を含む）")
     p.add_argument("--pseudo_dir", default=None,
                    help="(S3) 疑似異常 precompute の split フォルダ（例 <run>/pseudo）。normal と結合学習")
+    p.add_argument("--pseudo_max", type=int, default=0,
+                   help=">0 で pseudo の先頭 N 枚のみ使用（100倍プールから 5/10/50 倍を切り出す）")
     p.add_argument("--name", default="S2_image_to_map", help="実験名（出力フォルダ接頭辞）")
     p.add_argument("--pattern", default="image_to_map",
                    choices=["image_to_map", "feature_to_map", "image_to_feature"],
@@ -115,14 +117,15 @@ def main():
     stat_sources = [normal_ds]
     pseudo_ds = None
     if args.pseudo_dir:
+        pmax = args.pseudo_max or None
         if io_utils.is_packed(args.pseudo_dir):
             pseudo_ds = io_utils.PackedTargetDataset(
-                args.pseudo_dir, load_feature=load_feature, in_memory=False)
-            print(f"pseudo: packed memmap を使用（{len(pseudo_ds)} 枚）")
+                args.pseudo_dir, load_feature=load_feature, in_memory=False, max_count=pmax)
+            print(f"pseudo: packed memmap を使用（{len(pseudo_ds)} 枚, pseudo_max={args.pseudo_max}）")
         else:
             pseudo_ds = io_utils.DirectImageTargetDataset(
                 args.pseudo_dir, resize=args.resize, imagesize=args.imagesize,
-                load_feature=load_feature,
+                load_feature=load_feature, max_count=pmax,
             )
         stat_sources.append(pseudo_ds)
         print(f"学習サンプル: normal {len(normal_ds)} + pseudo {len(pseudo_ds)} 枚"

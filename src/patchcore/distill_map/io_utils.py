@@ -127,11 +127,13 @@ class DirectImageTargetDataset(Dataset):
     """
 
     def __init__(self, targets_split_dir: str, resize: int = 256, imagesize: int = 224,
-                 load_feature: bool = False):
+                 load_feature: bool = False, max_count: int = None):
         self.dir = targets_split_dir
         self.files = sorted(glob.glob(os.path.join(targets_split_dir, "*.pt")))
         if not self.files:
             raise RuntimeError(f"target .pt が見つかりません: {targets_split_dir}")
+        if max_count:
+            self.files = self.files[:max_count]
         self.transform = build_eval_transform(resize, imagesize)
         self.load_feature = load_feature
         # fit_score_stats 互換のため items=(idx, sid) を用意
@@ -357,7 +359,7 @@ class PackedTargetDataset(Dataset):
     RAM に載せる（正常など少数を常駐させ IO を消す）。
     """
 
-    def __init__(self, folder, load_feature=False, in_memory=False):
+    def __init__(self, folder, load_feature=False, in_memory=False, max_count=None):
         self.dir = folder
         with open(os.path.join(folder, PACK_MARKER)) as f:
             self.meta = json.load(f)
@@ -371,6 +373,8 @@ class PackedTargetDataset(Dataset):
         self.features = (np.load(os.path.join(folder, "features.npy"), mmap_mode=mmap)
                          if load_feature and self.meta.get("feature_shape") else None)
         self.count = int(self.meta["count"])
+        if max_count:  # スケール実験：100倍プールの先頭 N をサブセット参照
+            self.count = min(self.count, int(max_count))
         # fit_score_stats / 互換のため items=(idx, sid) を用意
         self.items = [(i, f"packed_{i:08d}") for i in range(self.count)]
 
@@ -378,7 +382,7 @@ class PackedTargetDataset(Dataset):
         return self.count
 
     def get_scores(self):
-        return np.asarray(self.scores)
+        return np.asarray(self.scores[:self.count])
 
     def __getitem__(self, j):
         amap = torch.from_numpy(np.array(self.targets[j], dtype=np.float32)).unsqueeze(0)

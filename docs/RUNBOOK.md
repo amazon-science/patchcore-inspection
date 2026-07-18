@@ -197,10 +197,23 @@
   - `--pseudo_dir` 指定時は normal(TeacherTargetDataset) と pseudo を結合。pseudo フォルダが packed（`packed_meta.json` あり）なら `PackedTargetDataset`、そうでなければ `DirectImageTargetDataset` を自動選択。正規化統計は両者から算出。
   - **正常過学習の検知**：normal/pseudo をそれぞれ train と **hold-out（未使用・非オーバーサンプル）** に分割し、train 正常(probe) vs hold-out 正常の map 損失ギャップと hold-out 正常スコア分布（collapse 検知）を毎 epoch 記録。`overfit_normal.png` を出力、`train_log.csv` に `train_normal_map/holdout_normal_map/overfit_gap/holdout_normal_score_mean` 等。early stopping は hold-out（正常＋疑似）損失を監視。
   - **比率固定サンプラ**：`--normal_pseudo_ratio`（既定 1.0=1:1）でバッチ内 normal:pseudo を一定化。`--steps_per_epoch>0` で 1epoch のステップ数を固定（正常過反復による肥大化を抑制）。
+  - **スケール切り出し**：`--pseudo_max N` で pseudo の先頭 N 枚のみ使用（100倍プールから 5/10/50 倍を再生成なしで切り出す）。
   - **高速化**：`--cache_normal 1`（正常 RAM 常駐, 既定ON）、pin_memory/persistent_workers/`--prefetch_factor`/`--channels_last`/cudnn.benchmark。`--probe_size` は過学習ギャップ用に評価する train 正常の枚数。
 - **出力先**：`results/distill_map/<name>_<YYYYMMDD_HHMMSS>/`
   - `checkpoints/{best,last}.ckpt` / `train_curve.png` / `train_log.csv` / `overfit_normal.png` / `config.json` / `meta.json` / `log.txt`
 - **想定時間**：枚数・epoch 依存（train 全枚数×100ep は長時間）
+
+### bin/run_pseudo_scale_experiment.sh — 疑似異常スケール実験①（5/10/50/100倍）一括
+
+- **目的**：正常23,888基準で疑似異常を 5/10/50/100 倍に増やし ①(image_to_map) の精度変化を比較。100倍プールを1回生成・pack し、5/10/50 倍は `--pseudo_max` で先頭サブセット参照（再生成なし）。
+- **前提**：`PYTHONPATH`（スクリプト内で設定）、venv、GPU、教師フォルダ。**長時間ジョブ**（100倍生成＋pack で数百GB／数時間、学習×4）。実行はユーザー判断で。
+- **コマンド例**：
+  ```bash
+  bash bin/run_pseudo_scale_experiment.sh <teacher_dir> [results/distill_map/pseudo_scale]
+  ```
+- **フロー**：正常/評価 Teacher precompute → blob 100倍生成 → map_from_mask --pack → 各スケール学習。
+- **出力先**：`results/distill_map/pseudo_scale/<YYYYMMDD_HHMMSS>/{normal_pc,pseudo_gen,pseudo_pack,train}/`
+- **後続**：`eval_distill_map`（各 best.ckpt）→ `aggregate_distill_final` → `render_results_table`（スケール別表）。
 
 ### scripts/generate_pseudo_anomalies.py — 疑似異常画像の生成（S3 用）
 
