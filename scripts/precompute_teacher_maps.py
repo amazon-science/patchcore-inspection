@@ -38,7 +38,9 @@ SPLIT_MAP = {"train": mvtec.DatasetSplit.TRAIN, "test": mvtec.DatasetSplit.TEST}
 
 def parse_args():
     p = argparse.ArgumentParser(description="PatchCore Teacher の異常マップ/スコアを precompute")
-    p.add_argument("teacher", help="教師モデルのフォルダ（patchcore_params.pkl を含む）")
+    p.add_argument("teacher", nargs="?", default=None,
+                   help="教師モデルのフォルダ（patchcore_params.pkl を含む）。"
+                        "--map_from_mask 使用時は不要")
     p.add_argument("--gpu", type=int, default=0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--dataset_path", default=os.path.join(REPO_ROOT, "dataset"))
@@ -63,6 +65,14 @@ def parse_args():
     p.add_argument("--image_dir", default=None,
                    help="任意画像フォルダを処理（疑似異常等）。--splits の代わりに使う")
     p.add_argument("--image_dir_split", default="pseudo", help="--image_dir の保存 split 名")
+    # 疑似異常スケール実験：Teacher をスキップし描画マスクを直接ターゲット化（①用）
+    p.add_argument("--map_from_mask", default=None,
+                   help="マスクフォルダ。指定時は faiss NN を回さず、ぼかしマスクを"
+                        " teacher_anomaly_map にする（--image_dir=異常画像と併用）")
+    p.add_argument("--mask_blur_sigma", type=float, default=2.0,
+                   help="マスク→ターゲットのガウシアンぼかし σ[px]（0で無効）")
+    p.add_argument("--pack", action="store_true",
+                   help="per-file .pt でなく packed memmap で保存（大規模向け）")
     p.add_argument(
         "--out",
         default=os.path.join(REPO_ROOT, "results", "distill_map", "precomputed"),
@@ -180,6 +190,144 @@ def _process_split(pc, device, args, split_name, split_dir, dataset=None):
     return stats
 
 
+def _list_images(folder):
+    import glob
+    exts = ("*.png", "*.jpg", "*.jpeg", "*.bmp")
+    return sorted(p for e in exts for p in glob.glob(os.path.join(folder, e)))
+
+
+def _find_mask(masks_dir, img_path):
+    """異常画像に対応するマスクを basename（拡張子違いも許容）で探す。"""
+    base = os.path.basename(img_path)
+    cand = os.path.join(masks_dir, base)
+    if os.path.isfile(cand):
+        return cand
+    stem = os.path.splitext(base)[0]
+    for e in (".png", ".jpg", ".jpeg", ".bmp"):
+        c = os.path.join(masks_dir, stem + e)
+        if os.path.isfile(c):
+            return c
+    return None
+
+
+def _mask_to_target(mask_img, resize, imagesize, sigma):
+    """マスク PIL(L) を画像と同一幾何(Resize→CenterCrop)で整列し、ぼかして [0,1] float。"""
+    from torchvision import transforms
+    m = transforms.Resize(resize, interpolation=transforms.InterpolationMode.NEAREST)(mask_img)
+    m = transforms.CenterCrop(imagesize)(m)
+    arr = (np.asarray(m, dtype=np.float32) > 127).astype(np.float32)
+    if sigma and sigma > 0:
+        from scipy.ndimage import gaussian_filter
+        arr = gaussian_filter(arr, sigma=sigma)
+    return np.clip(arr, 0.0, 1.0)
+
+
+def _process_mask_split(args, split_name, split_dir):
+    """Teacher をスキップし、ぼかしマスクを teacher_anomaly_map として保存する（①用）。"""
+    import PIL.Image
+    from torchvision import transforms
+
+    from patchcore.distill_map.io_utils import PackedWriter
+    from patchcore.distill_map.io_utils import sample_id as _sid
+
+    os.makedirs(split_dir, exist_ok=True)
+    img_paths = _list_images(args.image_dir)
+    if not img_paths:
+        raise RuntimeError(f"異常画像が見つかりません: {args.image_dir}")
+    limit = args.max_train or args.max_per_split
+    n_total = min(limit, len(img_paths)) if limit else len(img_paths)
+    img_paths = img_paths[:n_total]
+    S = args.imagesize
+    resize_img = transforms.Resize(args.resize)
+    crop = transforms.CenterCrop(S)
+
+    writer = None
+    if args.pack:
+        writer = PackedWriter(split_dir, n_total, imagesize=S, map_size=(S, S), save_image=True)
+    scores, labels = [], []
+    for i, ip in enumerate(img_paths):
+        mp = _find_mask(args.map_from_mask, ip)
+        if mp is None:
+            raise RuntimeError(f"対応マスクが見つかりません: {ip}")
+        target = _mask_to_target(PIL.Image.open(mp).convert("L"),
+                                 args.resize, S, args.mask_blur_sigma)
+        score = float(target.max())
+        if writer is not None:
+            pim = crop(resize_img(PIL.Image.open(ip).convert("RGB")))
+            arr = np.asarray(pim, dtype=np.uint8).transpose(2, 0, 1)  # [3,S,S]
+            writer.write(i, target=target, score=score, label=1, image=arr, image_path=ip)
+        else:
+            rec = {
+                "image_path": ip, "image_name": os.path.basename(ip),
+                "teacher_anomaly_map": torch.from_numpy(target),
+                "teacher_anomaly_score": score, "label": 1,
+            }
+            torch.save(rec, os.path.join(split_dir, _sid(os.path.basename(ip)) + ".pt"))
+        scores.append(score)
+        labels.append(1)
+        if (i + 1) % 5000 == 0:
+            print(f"  [{split_name}] {i + 1}/{n_total} 保存", flush=True)
+
+    s = np.asarray(scores, dtype=np.float64)
+    stats = {
+        "count": int(len(scores)), "n_anomaly": int(sum(labels)),
+        "map_size": [S, S], "feature_shape": None,
+        "score_mean": float(s.mean()) if len(s) else None,
+        "score_std": float(s.std()) if len(s) else None,
+        "score_min": float(s.min()) if len(s) else None,
+        "score_max": float(s.max()) if len(s) else None,
+    }
+    if writer is not None:
+        writer.close(extra_meta={"source": "map_from_mask", "blur_sigma": args.mask_blur_sigma,
+                                 "n_anomaly": int(sum(labels))})
+    print(f"  [{split_name}] 完了(map_from_mask): {stats}")
+    return stats
+
+
+def _mask_sanity_figure(split_dir, run_dir, args):
+    """先頭数件の (異常画像, ぼかしターゲット, オーバーレイ) を並べる。"""
+    import PIL.Image
+    from patchcore.distill_map.io_utils import (
+        IMAGENET_MEAN, IMAGENET_STD, PackedTargetDataset, is_packed)
+    rows = []
+    if is_packed(split_dir):
+        ds = PackedTargetDataset(split_dir, in_memory=False)
+        mean = np.array(IMAGENET_MEAN).reshape(1, 1, 3)
+        std = np.array(IMAGENET_STD).reshape(1, 1, 3)
+        for j in range(min(4, len(ds))):
+            it = ds[j]
+            img = it["image"].numpy().transpose(1, 2, 0)
+            img = np.clip(img * std + mean, 0, 1)
+            rows.append((img, it["teacher_map"].numpy()[0]))
+    else:
+        import glob
+        from torchvision import transforms
+        for f in sorted(glob.glob(os.path.join(split_dir, "*.pt")))[:4]:
+            rec = torch.load(f, weights_only=False)
+            im = transforms.CenterCrop(args.imagesize)(
+                transforms.Resize(args.resize)(PIL.Image.open(rec["image_path"]).convert("RGB")))
+            rows.append((np.asarray(im) / 255.0, rec["teacher_anomaly_map"].numpy()))
+    if not rows:
+        return None
+    fig, axes = plt.subplots(len(rows), 3, figsize=(9, 3 * len(rows)))
+    if len(rows) == 1:
+        axes = axes[None, :]
+    for r, (img, tgt) in enumerate(rows):
+        axes[r, 0].imshow(img); axes[r, 0].set_title("異常画像")
+        im = axes[r, 1].imshow(tgt, cmap="jet", vmin=0, vmax=1)
+        axes[r, 1].set_title("ぼかしターゲット")
+        axes[r, 2].imshow(img); axes[r, 2].imshow(tgt, cmap="jet", alpha=0.5, vmin=0, vmax=1)
+        axes[r, 2].set_title("オーバーレイ")
+        for c in range(3):
+            axes[r, c].set_xlabel("x [px]"); axes[r, c].set_ylabel("y [px]")
+    fig.suptitle(f"map_from_mask サニティ（σ={args.mask_blur_sigma}）", fontsize=11)
+    fig.tight_layout()
+    out = os.path.join(run_dir, "mask_targets_sanity.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
 def _sanity_figure(run_dir, args):
     """test split から正常/異常を各2枚選び、入力と A_T ヒートマップを並べる。"""
     test_dir = os.path.join(run_dir, "test")
@@ -232,12 +380,38 @@ def main():
     print(f"出力先: {run_dir}")
     print(f"Device: {device}  faiss_on_gpu={on_gpu}")
 
+    all_stats = {}
+    # --- ①用の高速経路：Teacher をスキップし描画マスクを直接ターゲット化 ---
+    if args.map_from_mask:
+        if not args.image_dir:
+            raise SystemExit("--map_from_mask は --image_dir（異常画像フォルダ）と併用してください")
+        if args.save_feature:
+            raise SystemExit("--map_from_mask + --save_feature は未対応（②③実装時に追加予定）")
+        split_name = args.image_dir_split
+        split_dir = os.path.join(run_dir, split_name)
+        print(f"map_from_mask: 画像={args.image_dir} / マスク={args.map_from_mask} "
+              f"→ split='{split_name}' (σ={args.mask_blur_sigma}, pack={args.pack})")
+        all_stats[split_name] = _process_mask_split(args, split_name, split_dir)
+        with open(os.path.join(run_dir, "stats.json"), "w") as f:
+            json.dump(all_stats, f, ensure_ascii=False, indent=2)
+        sanity = _mask_sanity_figure(split_dir, run_dir, args)
+        print(f"サニティ図: {sanity}")
+        runlog.write_meta(run_dir, extra={
+            "map_from_mask": args.map_from_mask, "image_dir": args.image_dir,
+            "image_dir_split": split_name, "mask_blur_sigma": args.mask_blur_sigma,
+            "pack": args.pack, "resize": args.resize, "imagesize": args.imagesize,
+            "seed": args.seed, "stats": all_stats,
+        })
+        print(f"完了: {run_dir}")
+        return
+
+    if not args.teacher:
+        raise SystemExit("teacher（教師モデルのフォルダ）を指定してください（--map_from_mask 以外では必須）")
     nn_method = patchcore.common.FaissNN(on_gpu, args.num_workers)
     pc = patchcore.patchcore.PatchCore(device)
     pc.load_from_path(args.teacher, device=device, nn_method=nn_method)
     print(f"教師ロード完了: {args.teacher}")
 
-    all_stats = {}
     if args.image_dir:
         from patchcore.distill_map.io_utils import ImageFolderDataset
         split_name = args.image_dir_split

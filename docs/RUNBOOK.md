@@ -129,6 +129,16 @@
     --gpu 0 --image_dir results/distill_map/pseudo/<ts>/anomaly --image_dir_split pseudo
   ```
   - `--image_dir` は任意画像フォルダを処理し `<run>/pseudo/*.pt` に保存（image_path はフルパス）。
+  ```bash
+  # 疑似スケール実験①用：Teacher をスキップし描画マスクを直接ターゲット化（faiss NN 不要・高速）
+  # packed memmap 出力（大規模向け。学習は PackedTargetDataset が自動使用）
+  PYTHONPATH=./src .venv/bin/python scripts/precompute_teacher_maps.py \
+    --map_from_mask results/distill_map/pseudo/<ts>/masks \
+    --image_dir     results/distill_map/pseudo/<ts>/anomaly \
+    --image_dir_split pseudo --mask_blur_sigma 2.0 --pack
+  ```
+  - `--map_from_mask`：`teacher` 不要。ぼかしマスク（σ=`--mask_blur_sigma`）を teacher_anomaly_map に、score=マップ最大値、label=1。`--pack` で `<run>/pseudo/` に packed memmap（images uint8 / targets fp16 / scores / labels / `packed_meta.json`）。省略時は per-file `.pt`。`mask_targets_sanity.png` を出力。
+  - ②③（特徴が必要な pattern）は `--map_from_mask --save_feature` が未対応（今後追加）。①(image_to_map) 専用。
 - **出力先**：`results/distill_map/precomputed/<YYYYMMDD_HHMMSS>/`
   - `<split>/<sample_id>.pt`（image_path / teacher_anomaly_map / teacher_anomaly_score / label / mask）
   - `stats.json`（スコア統計・map サイズ）/ `teacher_targets_sanity.png` / `meta.json` / `log.txt`
@@ -184,9 +194,12 @@
   PYTHONPATH=./src .venv/bin/python bin/train_distill_map.py <normal_precompute_dir> \
     --pseudo_dir <pseudo_precompute_dir>/pseudo --name S3_image_to_map --gpu 0 --epochs 30
   ```
-  - `--pseudo_dir` 指定時は normal(TeacherTargetDataset) と pseudo(DirectImageTargetDataset) を ConcatDataset で結合し、正規化統計は両者から算出。
+  - `--pseudo_dir` 指定時は normal(TeacherTargetDataset) と pseudo を結合。pseudo フォルダが packed（`packed_meta.json` あり）なら `PackedTargetDataset`、そうでなければ `DirectImageTargetDataset` を自動選択。正規化統計は両者から算出。
+  - **正常過学習の検知**：normal/pseudo をそれぞれ train と **hold-out（未使用・非オーバーサンプル）** に分割し、train 正常(probe) vs hold-out 正常の map 損失ギャップと hold-out 正常スコア分布（collapse 検知）を毎 epoch 記録。`overfit_normal.png` を出力、`train_log.csv` に `train_normal_map/holdout_normal_map/overfit_gap/holdout_normal_score_mean` 等。early stopping は hold-out（正常＋疑似）損失を監視。
+  - **比率固定サンプラ**：`--normal_pseudo_ratio`（既定 1.0=1:1）でバッチ内 normal:pseudo を一定化。`--steps_per_epoch>0` で 1epoch のステップ数を固定（正常過反復による肥大化を抑制）。
+  - **高速化**：`--cache_normal 1`（正常 RAM 常駐, 既定ON）、pin_memory/persistent_workers/`--prefetch_factor`/`--channels_last`/cudnn.benchmark。`--probe_size` は過学習ギャップ用に評価する train 正常の枚数。
 - **出力先**：`results/distill_map/<name>_<YYYYMMDD_HHMMSS>/`
-  - `checkpoints/{best,last}.ckpt` / `train_curve.png` / `train_log.csv` / `config.json` / `meta.json` / `log.txt`
+  - `checkpoints/{best,last}.ckpt` / `train_curve.png` / `train_log.csv` / `overfit_normal.png` / `config.json` / `meta.json` / `log.txt`
 - **想定時間**：枚数・epoch 依存（train 全枚数×100ep は長時間）
 
 ### scripts/generate_pseudo_anomalies.py — 疑似異常画像の生成（S3 用）
