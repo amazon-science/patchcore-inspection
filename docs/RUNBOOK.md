@@ -233,9 +233,18 @@
     --blob_shapes tri rect penta hexa circle ellipse
   ```
   - `blob`：単色の三角/矩形/五角/六角/円/楕円を 1 画像に `[count_min,count_max]` 個、短辺比 `[size_min,size_max]` のサイズでランダム描画。マスクは描画領域。`blob_cfg` は meta.json に記録。
-- **出力先**：`results/distill_map/pseudo/<YYYYMMDD_HHMMSS>/`
-  - `anomaly/*.png` / `masks/*.png` / `pseudo_sanity.png` / `meta.json` / `log.txt`
-- **想定時間**：1,000 枚で数十秒
+  ```bash
+  # 大規模（100倍）：シャード化サブフォルダ＋並列。--out に外部ストレージを指定可
+  PYTHONPATH=./src .venv/bin/python scripts/generate_pseudo_anomalies.py \
+    --num 2388800 --seed 0 --types blob \
+    --blob_count_min 1 --blob_count_max 3 --blob_size_min 0.02 --blob_size_max 0.50 \
+    --shard_size 5000 --workers 16 \
+    --out /disk/data_area4/t-hori/bfai/data_augmentation
+  ```
+  - `--shard_size`：1シャード(サブフォルダ `anomaly/00000/` 等)あたり枚数。単一ディレクトリ過密を回避。`--workers`：並列プロセス数。ファイル名は全体 index `pseudo_{i:08d}.png`。
+- **出力先**：`<out>/<YYYYMMDD_HHMMSS>/`
+  - `anomaly/<shard>/pseudo_*.png` / `masks/<shard>/pseudo_*.png` / `pseudo_sanity.png` / `meta.json` / `log.txt`
+- **想定時間**：1,000 枚で数十秒。100倍(239万枚)は workers 依存で数十分〜数時間
 
 ### bin/eval_distill_map.py — Student の評価（エントリポイント）
 

@@ -191,22 +191,28 @@ def _process_split(pc, device, args, split_name, split_dir, dataset=None):
 
 
 def _list_images(folder):
+    """フォルダ内の画像を再帰的に列挙（シャード化サブフォルダに対応）。"""
     import glob
-    exts = ("*.png", "*.jpg", "*.jpeg", "*.bmp")
-    return sorted(p for e in exts for p in glob.glob(os.path.join(folder, e)))
+    exts = ("png", "jpg", "jpeg", "bmp")
+    files = [p for e in exts for p in glob.glob(os.path.join(folder, "**", f"*.{e}"), recursive=True)]
+    files += [p for e in exts for p in glob.glob(os.path.join(folder, f"*.{e}"))]
+    return sorted(set(files))
 
 
-def _find_mask(masks_dir, img_path):
-    """異常画像に対応するマスクを basename（拡張子違いも許容）で探す。"""
-    base = os.path.basename(img_path)
-    cand = os.path.join(masks_dir, base)
+def _find_mask(masks_dir, image_dir, img_path):
+    """異常画像に対応するマスクを探す。まず image_dir からの相対パス（シャード構造を保持）、
+    次に basename（拡張子違いも許容）でフォールバック。"""
+    rel = os.path.relpath(img_path, image_dir)
+    cand = os.path.join(masks_dir, rel)
     if os.path.isfile(cand):
         return cand
+    base = os.path.basename(img_path)
     stem = os.path.splitext(base)[0]
-    for e in (".png", ".jpg", ".jpeg", ".bmp"):
-        c = os.path.join(masks_dir, stem + e)
-        if os.path.isfile(c):
-            return c
+    for d in (os.path.dirname(cand), masks_dir):
+        for e in (".png", ".jpg", ".jpeg", ".bmp"):
+            c = os.path.join(d, stem + e)
+            if os.path.isfile(c):
+                return c
     return None
 
 
@@ -246,7 +252,7 @@ def _process_mask_split(args, split_name, split_dir):
         writer = PackedWriter(split_dir, n_total, imagesize=S, map_size=(S, S), save_image=True)
     scores, labels = [], []
     for i, ip in enumerate(img_paths):
-        mp = _find_mask(args.map_from_mask, ip)
+        mp = _find_mask(args.map_from_mask, args.image_dir, ip)
         if mp is None:
             raise RuntimeError(f"対応マスクが見つかりません: {ip}")
         target = _mask_to_target(PIL.Image.open(mp).convert("L"),

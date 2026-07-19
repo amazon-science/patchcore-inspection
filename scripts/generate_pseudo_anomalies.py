@@ -6,7 +6,9 @@
 保護対象（./dataset, /disk/data_area4）には書き込まない。
 """
 import argparse
+import functools
 import glob
+import multiprocessing as mp
 import os
 
 import matplotlib
@@ -43,6 +45,9 @@ def parse_args():
                    help="図形サイズ上限（短辺に対する比 0-1）")
     p.add_argument("--blob_shapes", nargs="+", default=list(PA.BLOB_SHAPES),
                    choices=list(PA.BLOB_SHAPES), help="使用する図形の集合")
+    p.add_argument("--shard_size", type=int, default=5000,
+                   help="1シャード(サブフォルダ)あたりの枚数。大規模で単一ディレクトリ過密を回避")
+    p.add_argument("--workers", type=int, default=1, help="並列プロセス数")
     p.add_argument("--out", default=os.path.join(REPO_ROOT, "results", "distill_map", "pseudo"))
     return p.parse_args()
 
@@ -55,46 +60,85 @@ def _list_images(source_dir):
     return sorted(files)
 
 
+def _shard_name(i, shard_size):
+    return f"{i // shard_size:05d}"
+
+
+def _gen_one(i, src_path, save_size, types, blob_cfg, seed):
+    """index i の疑似異常を生成して (pseudo, mask, kind) を返す（rng は index 依存で再現可能）。"""
+    rng = np.random.default_rng([seed, i])
+    img = PIL.Image.open(src_path).convert("RGB").resize(
+        (save_size, save_size), PIL.Image.BILINEAR)
+    arr = np.asarray(img, dtype=np.uint8)
+    return PA.generate(arr, rng, types=types, blob_cfg=blob_cfg)
+
+
+def _worker(arg, save_size, types, blob_cfg, seed, anom_dir, mask_dir, shard_size):
+    i, src_path = arg
+    pseudo, mask, kind = _gen_one(i, src_path, save_size, types, blob_cfg, seed)
+    shard = _shard_name(i, shard_size)
+    sid = f"pseudo_{i:08d}"
+    PIL.Image.fromarray(pseudo).save(os.path.join(anom_dir, shard, sid + ".png"))
+    PIL.Image.fromarray(mask).save(os.path.join(mask_dir, shard, sid + ".png"))
+    return kind
+
+
 def main():
     args = parse_args()
-    rng = np.random.default_rng(args.seed)
     run_dir = runlog.make_run_dir(args.out)
     runlog.start_tee(run_dir)
     anom_dir = os.path.join(run_dir, "anomaly")
     mask_dir = os.path.join(run_dir, "masks")
-    os.makedirs(anom_dir, exist_ok=True)
-    os.makedirs(mask_dir, exist_ok=True)
 
     sources = _list_images(args.source_dir)
     if not sources:
         raise RuntimeError(f"正常画像が見つかりません: {args.source_dir}")
-    print(f"ソース正常画像: {len(sources)} 枚 → 疑似異常 {args.num} 枚生成")
+    print(f"ソース正常画像: {len(sources)} 枚 → 疑似異常 {args.num} 枚生成 "
+          f"(shard_size={args.shard_size}, workers={args.workers})")
 
     blob_cfg = {
         "count_min": args.blob_count_min, "count_max": args.blob_count_max,
         "size_min": args.blob_size_min, "size_max": args.blob_size_max,
         "shapes": tuple(args.blob_shapes),
     }
+    types = tuple(args.types)
 
-    pick = rng.integers(0, len(sources), size=args.num)
+    # シャード用サブフォルダを事前作成（worker 内の makedirs 連打を避ける）
+    n_shards = (args.num + args.shard_size - 1) // args.shard_size
+    for s in range(n_shards):
+        os.makedirs(os.path.join(anom_dir, f"{s:05d}"), exist_ok=True)
+        os.makedirs(os.path.join(mask_dir, f"{s:05d}"), exist_ok=True)
+
+    master = np.random.default_rng(args.seed)
+    pick = master.integers(0, len(sources), size=args.num)
+    tasks = ((i, sources[int(pick[i])]) for i in range(args.num))
+    work = functools.partial(_worker, save_size=args.save_size, types=types,
+                             blob_cfg=blob_cfg, seed=args.seed, anom_dir=anom_dir,
+                             mask_dir=mask_dir, shard_size=args.shard_size)
+
     type_counts = {}
-    samples = []
-    for i, idx in enumerate(pick):
-        img = PIL.Image.open(sources[idx]).convert("RGB").resize(
-            (args.save_size, args.save_size), PIL.Image.BILINEAR
-        )
-        arr = np.asarray(img, dtype=np.uint8)
-        pseudo, mask, kind = PA.generate(arr, rng, types=tuple(args.types), blob_cfg=blob_cfg)
-        type_counts[kind] = type_counts.get(kind, 0) + 1
-        sid = f"pseudo_{i:06d}"
-        PIL.Image.fromarray(pseudo).save(os.path.join(anom_dir, sid + ".png"))
-        PIL.Image.fromarray(mask).save(os.path.join(mask_dir, sid + ".png"))
-        if len(samples) < 8:
-            samples.append((arr, pseudo, mask, kind))
-        if (i + 1) % 200 == 0:
-            print(f"  {i + 1}/{args.num} 生成", flush=True)
+    log_every = max(1, args.num // 100)
+    if args.workers > 1:
+        with mp.Pool(args.workers) as pool:
+            for k, kind in enumerate(pool.imap_unordered(work, tasks, chunksize=256)):
+                type_counts[kind] = type_counts.get(kind, 0) + 1
+                if (k + 1) % log_every == 0:
+                    print(f"  {k + 1}/{args.num} 生成", flush=True)
+    else:
+        for k, arg in enumerate(tasks):
+            kind = work(arg)
+            type_counts[kind] = type_counts.get(kind, 0) + 1
+            if (k + 1) % log_every == 0:
+                print(f"  {k + 1}/{args.num} 生成", flush=True)
 
-    # サニティ図
+    # サニティ図（先頭8件を再生成。src は正常, 生成物は per-index rng で再現）
+    samples = []
+    for i in range(min(8, args.num)):
+        sp = sources[int(pick[i])]
+        orig = np.asarray(PIL.Image.open(sp).convert("RGB").resize(
+            (args.save_size, args.save_size), PIL.Image.BILINEAR), dtype=np.uint8)
+        pseudo, mask, kind = _gen_one(i, sp, args.save_size, types, blob_cfg, args.seed)
+        samples.append((orig, pseudo, mask, kind))
     fig, axes = plt.subplots(len(samples), 3, figsize=(9, 3 * len(samples)))
     if len(samples) == 1:
         axes = axes[None, :]
@@ -113,7 +157,8 @@ def main():
     runlog.write_meta(run_dir, extra={
         "source_dir": args.source_dir, "num": args.num, "seed": args.seed,
         "save_size": args.save_size, "types": args.types, "type_counts": type_counts,
-        "blob_cfg": blob_cfg,
+        "blob_cfg": blob_cfg, "shard_size": args.shard_size, "n_shards": n_shards,
+        "workers": args.workers,
     })
     print(f"完了: {run_dir}")
 
