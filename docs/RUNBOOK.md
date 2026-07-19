@@ -242,9 +242,24 @@
     --out /disk/data_area4/t-hori/bfai/data_augmentation
   ```
   - `--shard_size`：1シャード(サブフォルダ `anomaly/00000/` 等)あたり枚数。単一ディレクトリ過密を回避。`--workers`：並列プロセス数。ファイル名は全体 index `pseudo_{i:08d}.png`。
+  - `--per_image N`：**ソース基点モード**（正常1枚につき N 枚を連番生成、各ソースを1回だけ読む＝I/O最小）。総数=正常枚数×N。ランダム抽出（`--num`）より高速。
+  ```bash
+  # 【推奨・大規模】直接 packed 出力：PNG を介さず image+ぼかしターゲットを memmap へ
+  # （NFS で数百万 PNG のメタデータ律速を回避。①生成と②map_from_mask を統合）
+  PYTHONPATH=./src .venv/bin/python scripts/generate_pseudo_anomalies.py \
+    --source_dir dataset/anomaly_dataset/train/good \
+    --per_image 100 --pack --mask_blur_sigma 2.0 --sample_png 500 \
+    --seed 0 --types blob --blob_count_min 1 --blob_count_max 3 \
+    --blob_size_min 0.02 --blob_size_max 0.50 --workers 14 \
+    --out /disk/data_area4/t-hori/bfai/data_augmentation
+  ```
+  - `--pack`（`--per_image` 必須）：`<run>/pseudo/` に PackedWriter で `images(uint8 224)/targets(fp16 224 ぼかしマスク)/scores/labels/packed_meta.json` を直接生成。学習は `--pseudo_dir <run>/pseudo`（PackedTargetDataset が自動使用、`--pseudo_max` でスケール切出し）。閲覧用に `sample_png/` と `pack_sanity.png` も保存。map_from_mask は不要。
+  - fork 共有 memmap に複数プロセスが分散書込み（NFS 永続化確認済み）。600GB 級は NFS 帯域律速で数時間。
 - **出力先**：`<out>/<YYYYMMDD_HHMMSS>/`
-  - `anomaly/<shard>/pseudo_*.png` / `masks/<shard>/pseudo_*.png` / `pseudo_sanity.png` / `meta.json` / `log.txt`
-- **想定時間**：1,000 枚で数十秒。100倍(239万枚)は workers 依存で数十分〜数時間
+  - PNG 経路：`anomaly/<shard>/pseudo_*.png` / `masks/<shard>/pseudo_*.png` / `pseudo_sanity.png`
+  - pack 経路：`pseudo/{images,targets,scores,labels}.npy` / `packed_meta.json` / `sample_png/` / `pack_sanity.png`
+  - 共通：`meta.json` / `log.txt`
+- **想定時間**：1,000 枚で数十秒。100倍(239万枚)は pack で NFS 帯域(≈70MB/s)律速の数時間
 
 ### bin/eval_distill_map.py — Student の評価（エントリポイント）
 
