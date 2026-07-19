@@ -127,13 +127,14 @@ class DirectImageTargetDataset(Dataset):
     """
 
     def __init__(self, targets_split_dir: str, resize: int = 256, imagesize: int = 224,
-                 load_feature: bool = False, max_count: int = None):
+                 load_feature: bool = False, max_count: int = None, target_scale: float = 1.0):
         self.dir = targets_split_dir
         self.files = sorted(glob.glob(os.path.join(targets_split_dir, "*.pt")))
         if not self.files:
             raise RuntimeError(f"target .pt が見つかりません: {targets_split_dir}")
         if max_count:
             self.files = self.files[:max_count]
+        self.target_scale = float(target_scale)
         self.transform = build_eval_transform(resize, imagesize)
         self.load_feature = load_feature
         # fit_score_stats 互換のため items=(idx, sid) を用意
@@ -150,9 +151,9 @@ class DirectImageTargetDataset(Dataset):
             amap = amap.unsqueeze(0)
         out = {
             "image": image,
-            "teacher_map": amap.float(),
+            "teacher_map": amap.float() * self.target_scale,
             "teacher_score": torch.tensor(
-                float(rec["teacher_anomaly_score"]), dtype=torch.float32
+                float(rec["teacher_anomaly_score"]) * self.target_scale, dtype=torch.float32
             ),
             "label": int(rec["label"]),
             "sample_id": os.path.basename(self.files[j])[:-3],
@@ -359,11 +360,14 @@ class PackedTargetDataset(Dataset):
     RAM に載せる（正常など少数を常駐させ IO を消す）。
     """
 
-    def __init__(self, folder, load_feature=False, in_memory=False, max_count=None):
+    def __init__(self, folder, load_feature=False, in_memory=False, max_count=None,
+                 target_scale=1.0):
         self.dir = folder
         with open(os.path.join(folder, PACK_MARKER)) as f:
             self.meta = json.load(f)
         self.load_feature = load_feature
+        # A(マスク直接)ターゲットを PatchCore 異常スケールへ整合させる倍率
+        self.target_scale = float(target_scale)
         mmap = None if in_memory else "r"
         self.targets = np.load(os.path.join(folder, "targets.npy"), mmap_mode=mmap)
         self.scores = np.load(os.path.join(folder, "scores.npy"), mmap_mode=mmap)
@@ -382,13 +386,15 @@ class PackedTargetDataset(Dataset):
         return self.count
 
     def get_scores(self):
-        return np.asarray(self.scores[:self.count])
+        return np.asarray(self.scores[:self.count]) * self.target_scale
 
     def __getitem__(self, j):
         amap = torch.from_numpy(np.array(self.targets[j], dtype=np.float32)).unsqueeze(0)
+        amap = amap * self.target_scale
         out = {
             "teacher_map": amap,
-            "teacher_score": torch.tensor(float(self.scores[j]), dtype=torch.float32),
+            "teacher_score": torch.tensor(float(self.scores[j]) * self.target_scale,
+                                          dtype=torch.float32),
             "label": int(self.labels[j]),
             "sample_id": f"packed_{j:08d}",
             "image_path": f"{self.dir}#packed_{j:08d}",

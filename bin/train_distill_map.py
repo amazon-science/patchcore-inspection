@@ -35,6 +35,9 @@ def parse_args():
                    help="(S3) 疑似異常 precompute の split フォルダ（例 <run>/pseudo）。normal と結合学習")
     p.add_argument("--pseudo_max", type=int, default=0,
                    help=">0 で pseudo の先頭 N 枚のみ使用（100倍プールから 5/10/50 倍を切り出す）")
+    p.add_argument("--pseudo_target_scale", type=float, default=0.0,
+                   help="A(マスク直接)ターゲットの倍率。0=オート（正常スコア最大に合わせPatchCore異常"
+                        "スケールへ整合）。マスク0-1のまま混ぜると異常が正常に埋もれるため必須")
     p.add_argument("--name", default="S2_image_to_map", help="実験名（出力フォルダ接頭辞）")
     p.add_argument("--pattern", default="image_to_map",
                    choices=["image_to_map", "feature_to_map", "image_to_feature"],
@@ -117,16 +120,24 @@ def main():
     stat_sources = [normal_ds]
     pseudo_ds = None
     if args.pseudo_dir:
+        # A(マスク)ターゲットのスケール整合：正常のみ統計から倍率を決める（0=オート）
+        if args.pseudo_target_scale > 0:
+            pscale = args.pseudo_target_scale
+        else:
+            nstats = io_utils.fit_score_stats([normal_ds])
+            pscale = float(nstats["max"])
         pmax = args.pseudo_max or None
         if io_utils.is_packed(args.pseudo_dir):
             pseudo_ds = io_utils.PackedTargetDataset(
-                args.pseudo_dir, load_feature=load_feature, in_memory=False, max_count=pmax)
+                args.pseudo_dir, load_feature=load_feature, in_memory=False,
+                max_count=pmax, target_scale=pscale)
             print(f"pseudo: packed memmap を使用（{len(pseudo_ds)} 枚, pseudo_max={args.pseudo_max}）")
         else:
             pseudo_ds = io_utils.DirectImageTargetDataset(
                 args.pseudo_dir, resize=args.resize, imagesize=args.imagesize,
-                load_feature=load_feature, max_count=pmax,
+                load_feature=load_feature, max_count=pmax, target_scale=pscale,
             )
+        print(f"pseudo target_scale={pscale:.3f}（マスク→PatchCore異常スケール整合）")
         stat_sources.append(pseudo_ds)
         print(f"学習サンプル: normal {len(normal_ds)} + pseudo {len(pseudo_ds)} 枚"
               f"（pattern={args.pattern}）")
