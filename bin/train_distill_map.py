@@ -34,7 +34,10 @@ def parse_args():
     p.add_argument("--pseudo_dir", default=None,
                    help="(S3) 疑似異常 precompute の split フォルダ（例 <run>/pseudo）。normal と結合学習")
     p.add_argument("--pseudo_max", type=int, default=0,
-                   help=">0 で pseudo の先頭 N 枚のみ使用（100倍プールから 5/10/50 倍を切り出す）")
+                   help=">0 で pseudo を N 枚に絞る（大きいプールから 5/10/50 倍を切り出す）")
+    p.add_argument("--pseudo_subset", default="stride", choices=["stride", "head"],
+                   help="サブセット方法。stride=等間隔（全ソースを均等に含む・既定）／"
+                        "head=先頭N（ソース種類が減り枚数と背景多様性が交絡するので非推奨）")
     p.add_argument("--pseudo_target_scale", type=float, default=0.0,
                    help="A(マスク直接)ターゲットの倍率。0=オート（正常スコア最大に合わせPatchCore異常"
                         "スケールへ整合）。マスク0-1のまま混ぜると異常が正常に埋もれるため必須")
@@ -130,8 +133,9 @@ def main():
         if io_utils.is_packed(args.pseudo_dir):
             pseudo_ds = io_utils.PackedTargetDataset(
                 args.pseudo_dir, load_feature=load_feature, in_memory=False,
-                max_count=pmax, target_scale=pscale)
-            print(f"pseudo: packed memmap を使用（{len(pseudo_ds)} 枚, pseudo_max={args.pseudo_max}）")
+                max_count=pmax, target_scale=pscale, subset=args.pseudo_subset)
+            print(f"pseudo: packed memmap を使用（{len(pseudo_ds)} 枚, pseudo_max={args.pseudo_max}, "
+                  f"subset={args.pseudo_subset}）")
         else:
             pseudo_ds = io_utils.DirectImageTargetDataset(
                 args.pseudo_dir, resize=args.resize, imagesize=args.imagesize,

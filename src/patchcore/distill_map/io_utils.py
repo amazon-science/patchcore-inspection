@@ -361,7 +361,7 @@ class PackedTargetDataset(Dataset):
     """
 
     def __init__(self, folder, load_feature=False, in_memory=False, max_count=None,
-                 target_scale=1.0):
+                 target_scale=1.0, subset="stride"):
         self.dir = folder
         with open(os.path.join(folder, PACK_MARKER)) as f:
             self.meta = json.load(f)
@@ -376,35 +376,53 @@ class PackedTargetDataset(Dataset):
                        if self.meta.get("save_image") else None)
         self.features = (np.load(os.path.join(folder, "features.npy"), mmap_mode=mmap)
                          if load_feature and self.meta.get("feature_shape") else None)
-        self.count = int(self.meta["count"])
-        if max_count:  # スケール実験：100倍プールの先頭 N をサブセット参照
-            self.count = min(self.count, int(max_count))
+        total = int(self.meta["count"])
+        # スケール実験のサブセット：source基点並び（1正常画像→連番変種）のため、
+        # 先頭N件(head)だと使われる正常画像の種類が減り「枚数」と「背景多様性」が
+        # 交絡する。既定の stride は等間隔抽出で全ソースを均等に含める。
+        if max_count and int(max_count) < total:
+            n = int(max_count)
+            if subset == "head":
+                self.indices = np.arange(n, dtype=np.int64)
+            else:
+                self.indices = (np.arange(n, dtype=np.int64) * (total / n)).astype(np.int64)
+            self.count = n
+        else:
+            self.indices = None
+            self.count = total
+        self.subset = subset
         # fit_score_stats / 互換のため items=(idx, sid) を用意
         self.items = [(i, f"packed_{i:08d}") for i in range(self.count)]
+
+    def _row(self, j):
+        return int(self.indices[j]) if self.indices is not None else int(j)
 
     def __len__(self):
         return self.count
 
     def get_scores(self):
-        return np.asarray(self.scores[:self.count]) * self.target_scale
+        s = (np.asarray(self.scores)[self.indices] if self.indices is not None
+             else np.asarray(self.scores[:self.count]))
+        return s * self.target_scale
 
     def __getitem__(self, j):
-        amap = torch.from_numpy(np.array(self.targets[j], dtype=np.float32)).unsqueeze(0)
+        i = self._row(j)
+        amap = torch.from_numpy(np.array(self.targets[i], dtype=np.float32)).unsqueeze(0)
         amap = amap * self.target_scale
         out = {
             "teacher_map": amap,
-            "teacher_score": torch.tensor(float(self.scores[j]) * self.target_scale,
+            "teacher_score": torch.tensor(float(self.scores[i]) * self.target_scale,
                                           dtype=torch.float32),
-            "label": int(self.labels[j]),
-            "sample_id": f"packed_{j:08d}",
-            "image_path": f"{self.dir}#packed_{j:08d}",
+            "label": int(self.labels[i]),
+            "sample_id": f"packed_{i:08d}",
+            "image_path": f"{self.dir}#packed_{i:08d}",
         }
         if self.images is not None:
-            img = torch.from_numpy(np.array(self.images[j], dtype=np.float32)).div_(255.0)
+            img = torch.from_numpy(np.array(self.images[i], dtype=np.float32)).div_(255.0)
             out["image"] = (img - _NORM_MEAN_T) / _NORM_STD_T
         if self.features is not None:
             out["teacher_feature"] = torch.from_numpy(
-                np.array(self.features[j], dtype=np.float32))
+                np.array(self.features[i], dtype=np.float32))
         return out
 
 
