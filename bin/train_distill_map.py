@@ -123,9 +123,12 @@ def main():
     stat_sources = [normal_ds]
     pseudo_ds = None
     if args.pseudo_dir:
-        # A(マスク)ターゲットのスケール整合：正常のみ統計から倍率を決める（0=オート）
+        # A(マスク)ターゲットのスケール整合：正常のみ統計から倍率を決める（0=オート）。
+        # B(PatchCore距離マップ)は既に正常と同じ距離スケールなので倍率を掛けない。
         if args.pseudo_target_scale > 0:
             pscale = args.pseudo_target_scale
+        elif io_utils.pack_target_space(args.pseudo_dir) == "patchcore":
+            pscale = 1.0
         else:
             nstats = io_utils.fit_score_stats([normal_ds])
             pscale = float(nstats["max"])

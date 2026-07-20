@@ -353,6 +353,21 @@ def is_packed(path):
     return os.path.isfile(os.path.join(path, PACK_MARKER))
 
 
+def pack_target_space(path):
+    """packed の正解が載っている空間を返す。
+
+    ``"patchcore"``＝PatchCore 距離マップ（B方式。正常と同一スケールなので再スケール不要）、
+    ``"mask"``＝描画マスク（A方式。正常の距離スケールへ整合が必要）。packed でなければ None。
+    """
+    if not path or not is_packed(path):
+        return None
+    try:
+        with open(os.path.join(path, PACK_MARKER)) as f:
+            return json.load(f).get("target_space", "mask")
+    except Exception:
+        return None
+
+
 class PackedTargetDataset(Dataset):
     """:class:`PackedWriter` が書いた packed memmap を Student 学習で読む。
 

@@ -203,6 +203,31 @@
   - `checkpoints/{best,last}.ckpt` / `train_curve.png` / `train_log.csv` / `overfit_normal.png` / `config.json` / `meta.json` / `log.txt`
 - **想定時間**：枚数・epoch 依存（train 全枚数×100ep は長時間）
 
+### scripts/make_pseudo_targets_patchcore.py — 疑似異常の正解を PatchCore で作る（B方式）
+
+- **目的**：A方式（描画マスク＝教師あり学習）に対し、疑似画像を Teacher PatchCore に通した**メモリバンクへの最近傍距離マップ**を正解にする＝**真の蒸留**。Student は PatchCore の距離関数そのものを近似する。
+- **前提**：教師フォルダ、GPU。入力は A方式の packed（`images.npy` を持つ）。画像は再生成せず **symlink 共有**し `targets/scores/labels` のみ作り直す（A と B を並べて比較可能）。
+- **コマンド例**：
+  ```bash
+  T=results/ContinualLearning/20260526_比較検討/20260527_064537_N1000_P5/round_21
+  SRC=/tmp/t-hori/bfai/data_augmentation/<TS>/pseudo      # A方式のpack
+  OUT=/tmp/t-hori/bfai/pseudoB_<TS>
+
+  # 1) 割り当てだけ先に1回（並列実行する場合は必須）
+  PYTHONPATH=./src .venv/bin/python scripts/make_pseudo_targets_patchcore.py "$T" \
+    --pack "$SRC" --out "$OUT" --init_only
+
+  # 2) 2GPU で範囲分割（238,880枚を半分ずつ）
+  PYTHONPATH=./src .venv/bin/python scripts/make_pseudo_targets_patchcore.py "$T" \
+    --pack "$SRC" --out "$OUT" --gpu 0 --start 0      --end 119440 &
+  PYTHONPATH=./src .venv/bin/python scripts/make_pseudo_targets_patchcore.py "$T" \
+    --pack "$SRC" --out "$OUT" --gpu 1 --start 119440 --end 238880 &
+  ```
+  - `--limit N` でスモーク。`done.npy` に進捗を記録し、**再実行で済んだ行をスキップ**（中断復帰）。
+  - `packed_meta.json` に `target_space="patchcore"` を書くため、学習側の `--pseudo_target_scale` オートは**倍率を掛けない**（A の mask は正常スケールへ整合する）。
+- **出力先**：`--out`（packed。`train_distill_map.py --pseudo_dir <out>` にそのまま渡せる）
+- **想定時間**：Teacher 実測 **約5.4 img/s** → 5x(119,440)≈6.2h / 10x(238,880)≈12.4h（2GPU 並列で約半分）。targets は 24GB（10x, fp16）。
+
 ### bin/run_pseudo_scale_experiment.sh — 疑似異常スケール実験①（5/10/50/100倍）一括
 
 - **目的**：正常23,888基準で疑似異常を 5/10/50/100 倍に増やし ①(image_to_map) の精度変化を比較。100倍プールを1回生成・pack し、5/10/50 倍は `--pseudo_max` で先頭サブセット参照（再生成なし）。
