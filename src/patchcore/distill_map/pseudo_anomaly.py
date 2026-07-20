@@ -21,14 +21,21 @@ ANOMALY_TYPES = (
     "blob",
 )
 
-# blob（雑な図形の大量描画）の既定設定。サイズは短辺に対する比。
+# blob の既定設定。サイズは短辺に対する比（＝外接円半径/短辺）。
+# 既定値は実 test 欠陥マスク（116枚）の実測分布に合わせている：
+#   欠陥数/画像 中央値1・p90=3、半径r p5=0.005・中央値0.022・p90=0.123
+# 色は test の欠陥が単色（グレースケール）なので既定で白〜黒の単色。
 BLOB_SHAPES = ("tri", "rect", "penta", "hexa", "circle", "ellipse")
 DEFAULT_BLOB_CFG = {
-    "count_min": 3,
-    "count_max": 15,
-    "size_min": 0.02,
-    "size_max": 0.30,
+    "count_min": 1,
+    "count_max": 3,
+    "size_min": 0.005,
+    "size_max": 0.13,
+    "size_dist": "log",      # log=対数一様（実欠陥の裾広がりに整合） / uniform
     "shapes": BLOB_SHAPES,
+    "color_mode": "gray",    # gray=白〜黒の単色 / rgb=ランダム色
+    "gray_min": 0,
+    "gray_max": 255,
 }
 _REGULAR_NVERTS = {"tri": 3, "penta": 5, "hexa": 6}
 
@@ -179,9 +186,19 @@ def _blob(img, rng, cfg=None):
     n = int(rng.integers(cfg["count_min"], cfg["count_max"] + 1))
     for _ in range(n):
         shape = shapes[int(rng.integers(0, len(shapes)))]
-        r = max(1, int(rng.uniform(cfg["size_min"], cfg["size_max"]) * short))
+        if cfg.get("size_dist", "uniform") == "log":
+            lo = np.log(max(float(cfg["size_min"]), 1e-6))
+            hi = np.log(max(float(cfg["size_max"]), 1e-6))
+            frac = float(np.exp(rng.uniform(lo, hi)))
+        else:
+            frac = float(rng.uniform(cfg["size_min"], cfg["size_max"]))
+        r = max(1, int(frac * short))
         cx, cy = int(rng.integers(0, w)), int(rng.integers(0, h))
-        color = _rand_color(rng)
+        if cfg.get("color_mode", "rgb") == "gray":
+            v = int(rng.integers(int(cfg["gray_min"]), int(cfg["gray_max"]) + 1))
+            color = (v, v, v)
+        else:
+            color = _rand_color(rng)
         ang0 = float(rng.uniform(0, 2 * np.pi))
         pts = [(int(x), int(y)) for x, y in _shape_vertices(shape, cx, cy, r, ang0, rng)]
         dimg.polygon(pts, fill=color)

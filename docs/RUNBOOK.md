@@ -232,7 +232,8 @@
     --blob_size_min 0.02 --blob_size_max 0.30 \
     --blob_shapes tri rect penta hexa circle ellipse
   ```
-  - `blob`：単色の三角/矩形/五角/六角/円/楕円を 1 画像に `[count_min,count_max]` 個、短辺比 `[size_min,size_max]` のサイズでランダム描画。マスクは描画領域。`blob_cfg` は meta.json に記録。
+  - `blob`：三角/矩形/五角/六角/円/楕円を 1 画像に `[count_min,count_max]` 個、短辺比 `[size_min,size_max]` のサイズでランダム描画。マスクは描画領域。`blob_cfg` は meta.json に記録。
+  - **既定値は実 test 欠陥マスク(116枚)の実測分布に整合**：欠陥数/画像 中央値1・p90=3 → `count 1〜3`／半径r p5=0.005・中央値0.022・p90=0.123 → `size 0.005〜0.13` を `--blob_size_dist log`（対数一様）でサンプル。test の欠陥は単色なので `--blob_color_mode gray`（白〜黒の単色, `--blob_gray_min/max`）が既定。`rgb` でランダム色も可。
   ```bash
   # 大規模（100倍）：シャード化サブフォルダ＋並列。--out に外部ストレージを指定可
   PYTHONPATH=./src .venv/bin/python scripts/generate_pseudo_anomalies.py \

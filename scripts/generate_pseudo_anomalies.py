@@ -50,6 +50,16 @@ def parse_args():
                    help="図形サイズ上限（短辺に対する比 0-1）")
     p.add_argument("--blob_shapes", nargs="+", default=list(PA.BLOB_SHAPES),
                    choices=list(PA.BLOB_SHAPES), help="使用する図形の集合")
+    p.add_argument("--blob_size_dist", default=PA.DEFAULT_BLOB_CFG["size_dist"],
+                   choices=["log", "uniform"],
+                   help="サイズ分布。log=対数一様（実欠陥の裾広がりに整合）")
+    p.add_argument("--blob_color_mode", default=PA.DEFAULT_BLOB_CFG["color_mode"],
+                   choices=["gray", "rgb"],
+                   help="図形色。gray=白〜黒の単色（test欠陥に整合） / rgb=ランダム色")
+    p.add_argument("--blob_gray_min", type=int, default=PA.DEFAULT_BLOB_CFG["gray_min"],
+                   help="gray時の輝度下限 0-255")
+    p.add_argument("--blob_gray_max", type=int, default=PA.DEFAULT_BLOB_CFG["gray_max"],
+                   help="gray時の輝度上限 0-255")
     p.add_argument("--shard_size", type=int, default=5000,
                    help="1シャード(サブフォルダ)あたりの枚数。大規模で単一ディレクトリ過密を回避")
     p.add_argument("--workers", type=int, default=1, help="並列プロセス数")
@@ -245,7 +255,9 @@ def main():
     blob_cfg = {
         "count_min": args.blob_count_min, "count_max": args.blob_count_max,
         "size_min": args.blob_size_min, "size_max": args.blob_size_max,
-        "shapes": tuple(args.blob_shapes),
+        "size_dist": args.blob_size_dist, "shapes": tuple(args.blob_shapes),
+        "color_mode": args.blob_color_mode,
+        "gray_min": args.blob_gray_min, "gray_max": args.blob_gray_max,
     }
     types = tuple(args.types)
     source_major = args.per_image > 0
