@@ -228,6 +228,29 @@
 - **出力先**：`--out`（packed。`train_distill_map.py --pseudo_dir <out>` にそのまま渡せる）
 - **想定時間**：Teacher 実測 **約5.4 img/s** → 5x(119,440)≈6.2h / 10x(238,880)≈12.4h（2GPU 並列で約半分）。targets は 24GB（10x, fp16）。
 
+### scripts/precompute_pseudo_features.py — 疑似 packed の Teacher 特徴 F_T を precompute（②③用）
+
+- **目的**：②(feature_to_map)の入力・③(image_to_feature)の学習ターゲット・定量評価表の「特徴map評価(feat_MSE/MAE)」列に必要な **Teacher ResNet50 特徴 F_T([1024,28,28] fp16)** を、既存 packed（B方式の `<run>`。`images.npy`+`targets/scores/labels` を持つ）に対して計算。
+- **前提**：教師フォルダ、GPU。**特徴抽出は NN(faiss) 不要＝backbone forward のみ**なので B方式より速い（実測 GPU0 2本で ~17 img/s、NFS書き込み律速）。出力は packed memmap `features.npy`。`images/targets/scores/labels` は入力 pack から **symlink 共有**し `features.npy`+`done.npy` のみ新規＝**1フォルダで画像・異常map正解・特徴が揃い** `train_distill_map.py --pseudo_dir <out>` に渡すだけ（`PackedTargetDataset(load_feature=True)` 自動）。
+- **コマンド例**：
+  ```bash
+  T=results/ContinualLearning/20260526_比較検討/20260527_064537_N1000_P5/round_21
+  SRC=/tmp/t-hori/bfai/pseudoB_10x_<TS>                               # B方式pack(images+targets)
+  OUT=/disk/data_area4/t-hori/bfai/precomputed_pseudoB_feat_10x_<TS>  # 大容量はdata_area4へ
+
+  # 1) 割り当て（feature_shape 検出＋symlink）を先に1回
+  PYTHONPATH=./src .venv/bin/python scripts/precompute_pseudo_features.py "$T" \
+    --pack "$SRC" --out "$OUT" --no_faiss_on_gpu --init_only
+  # 2) 範囲分割で並列（GPU空き次第 --gpu を振り分け。3090等は --batch_size を下げる）
+  PYTHONPATH=./src .venv/bin/python scripts/precompute_pseudo_features.py "$T" \
+    --pack "$SRC" --out "$OUT" --no_faiss_on_gpu --batch_size 64 --gpu 0 --start 0      --end 119440 &
+  PYTHONPATH=./src .venv/bin/python scripts/precompute_pseudo_features.py "$T" \
+    --pack "$SRC" --out "$OUT" --no_faiss_on_gpu --batch_size 64 --gpu 0 --start 119440 --end 238880 &
+  ```
+  - `--limit N` でスモーク。`done.npy` で中断復帰。`--no_faiss_on_gpu` で faiss index を GPU に載せない（特徴抽出では未使用）。
+- **出力先**：`--out`（packed。10x で features は **約384GB fp16**）。`train_distill_map.py --pseudo_dir <out>`。
+- **想定時間**：10x(238,880) を GPU0 2本で **約3.9h**（NFS書き込み ~27MB/s 律速）。ローカルnvme出力なら GPU律速でより速いが容量方針で data_area4 を採用。
+
 ### bin/run_pseudo_scale_experiment.sh — 疑似異常スケール実験①（5/10/50/100倍）一括
 
 - **目的**：正常23,888基準で疑似異常を 5/10/50/100 倍に増やし ①(image_to_map) の精度変化を比較。100倍プールを1回生成・pack し、5/10/50 倍は `--pseudo_max` で先頭サブセット参照（再生成なし）。
