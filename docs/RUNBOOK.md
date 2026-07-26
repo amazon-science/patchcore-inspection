@@ -541,3 +541,16 @@ PYTHONPATH=./src python3 -m pytest -v
   - `--max_test N` でスモーク（ただし先頭は異常のみのため AUROC は NaN になる）。
 - **出力先**：`--out/<name>_<TS>/`（`metrics/front_bank_metrics.json`, `scores.csv`, `score_distribution.png`）
 - **想定時間**：1,388枚で 約3〜5分（faiss GPU、bank 823,200vec）。
+
+### bin/run_pseudoB_row3.sh — 評価表の「画像→特徴map」行（B方式10x）を埋める
+
+- **目的**：`run_pseudoB_23.sh` の [2] で学習した ③前段（P3B_front）を、`eval_front_with_bank.py` で Teacher メモリバンクに通し、表の下半分3行目（画像→特徴map）を埋める。
+- **前提**：`run_pseudoB_23.sh` のステップ[2]（③前段）が完了し `P3B_front_*/checkpoints/best.ckpt` があること。
+  - **`run_pseudoB_23.sh` に追記せず別ファイルにしている**：bash は実行中スクリプトをバイトオフセットで逐次読むため、走行中のファイルを編集すると後続コマンドが壊れる。
+- **コマンド例**：
+  ```bash
+  bash bin/run_pseudoB_row3.sh                   # 既定: GPU=1, 最新の P3B_front_* を自動選択
+  GPU=0 FRONT=<path>/best.ckpt bash bin/run_pseudoB_row3.sh   # 明示指定
+  ```
+- **出力先**：`results/distill_map/pseudoB_10x/eval_front_bank_10x_<TS>/`
+- **想定時間**：約3〜5分（faiss GPU、1,388枚）
