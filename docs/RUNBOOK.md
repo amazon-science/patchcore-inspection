@@ -554,3 +554,17 @@ PYTHONPATH=./src python3 -m pytest -v
   ```
 - **出力先**：`results/distill_map/pseudoB_10x/eval_front_bank_10x_<TS>/`
 - **想定時間**：約3〜5分（faiss GPU、1,388枚）
+
+### bin/run_pseudoB_23_local.sh — 疑似B方式10x の ②③（nvme 特徴版・高速）
+
+- **目的**：`run_pseudoB_23.sh` と同じ ②③ を、**疑似特徴を nvme に置いて**実行する高速版。条件（10x・steps_per_epoch）は変えない。
+- **経緯**：疑似特徴 384GB を NFS(data_area4) から乱択で読むと実効 **17.7MB/s**（1epoch=102.8GB → **97分**）で、30epoch に2日近くかかった。実測で nvme は **1,731MB/s**（約100倍）、NFS 逐次コピーは 114〜128MB/s。**特徴を nvme へ約50分でコピーしてから学習する方が圧倒的に速い**。
+- **前提**：`/tmp/t-hori/bfai/pseudoB_feat_local/` に features/targets/scores/labels/images（images は B方式 pack への symlink）。正常特徴も nvme（`/tmp/t-hori/bfai/allfeat_local/...`）。
+- **コマンド例**：
+  ```bash
+  bash bin/run_pseudoB_23_local.sh                    # 既定 GPU=1, 30ep, steps2000
+  GPU=0 EPOCHS=30 bash bin/run_pseudoB_23_local.sh
+  ```
+- **フロー**：② feature_to_map 学習→評価 → ③前段 image_to_feature → F_S precompute（F_S は大容量なので data_area4）→ ③後段 → ③連結評価 → [5b] `run_pseudoB_row3.sh`（画像→特徴map 行）
+- **出力先**：`results/distill_map/pseudoB_10x/`
+- **想定時間**：nvme 化により ② は 1epoch 数分オーダー（NFS 版の 97分/epoch から大幅短縮）
