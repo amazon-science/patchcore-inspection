@@ -32,7 +32,7 @@
 
 ### bin/load_and_evaluate_patchcore.py — 学習済みモデルの評価
 
-- **目的**：保存済みモデルをロードして AUROC 等を算出する。
+- **目的**：保存済みモデルをロードして AUROC / F1 / fps 等を算出する。
 - **前提**：`PYTHONPATH=./src`、学習済みモデルのパス。
 - **コマンド例**：
   ```bash
@@ -41,8 +41,25 @@
     patch_core_loader -p <model_path> --faiss_on_gpu \
     dataset -d anomaly_dataset --resize 256 --imagesize 224 mvtec ./dataset
   ```
+  - `--skip_pixel_metrics`：ピクセル AUROC を省略する。1,388枚×224×224 の AUROC 計算だけで数分かかるため、**fps だけが目的の場合はこれを付ける**（該当列は NaN で出力され、列構成は変わらない）。
+  - **GPU 指定は `CUDA_VISIBLE_DEVICES=<n>` ＋ `--gpu 0` にする**：faiss の GPU インデックスは [common.py](../src/patchcore/common.py#L36) で device 0 固定のため、`--gpu 1` だけでは faiss が GPU0 を掴んで OOM する。
 - **出力先**：`<save_folder>/`（`results.csv` / `results_summary.png` / `meta.json` / `log.txt`）
+  - `results.csv` の列：`instance_auroc` / `full_pixel_auroc` / `anomaly_pixel_auroc` / `instance_f1` / `fps` / `memory_mb` / `n_test_images`
 - **想定時間**：評価データ規模依存（長時間ジョブ。自動実行禁止）
+
+### bin/measure_cl_fps.sh — 継続学習9条件の fps 計測
+
+- **目的**：`results/ContinualLearning/20260526_比較検討/` の 9 条件（N∈{500,1000,2000} × コアセット率∈{1,5,10}%）について、**最終ラウンドのモデル**を再評価し fps を計測する。週次資料の定量評価表の `fps` 列を埋めるためのもの。
+- **前提**：GPU（P=10% は faiss インデックスだけで約 6.6GB、活性化込みで **約 8.6GB の空き VRAM が必要**）、`./dataset/anomaly_dataset`（テスト 1,388枚）。
+- **コマンド例**：
+  ```bash
+  bash bin/measure_cl_fps.sh                        # 既定: GPU=1, fps のみ（約30分）
+  GPU=1 WITH_PIXEL=1 bash bin/measure_cl_fps.sh     # ピクセル AUROC も計算（約1時間）
+  ```
+- **出力先**：`results/ContinualLearning/fps_<YYYYMMDD_HHMMSS>/`
+  - `<N####_P##>/results.csv`（条件ごと）/ `summary.csv`（9条件横断）/ `fps_summary.png` / `log.txt`
+- **想定時間**：fps のみ 約30分、ピクセル指標込み 約1時間（長時間ジョブ。自動実行禁止）
+- **注意**：fps は GPU 専有状態でないと過小に出る。**他ジョブが動いていない GPU で実行**し、資料には測定 GPU を明記すること。
 
 ### bin/run_continual_learning.py — 継続学習実験
 
@@ -462,6 +479,19 @@
   ```
 - **出力先**：`results/Benchmark_Results/viz/<YYYYMMDD_HHMMSS>/`
   - `benchmark_plot.png` / `benchmark_plot.html` / `meta.json` / `log.txt`
+- **想定時間**：数秒
+
+### scripts/plot_cl_fps.py — 継続学習 fps 計測の可視化
+
+- **目的**：`measure_cl_fps.sh` の `summary.csv` から 3 面図（バンクサイズ vs fps / 条件別 fps / 精度 vs 速度）を生成。`measure_cl_fps.sh` の末尾から自動で呼ばれる。
+- **前提**：`PYTHONPATH=./src`、`summary.csv`。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python scripts/plot_cl_fps.py \
+    --summary results/ContinualLearning/fps_<TS>/summary.csv \
+    --out     results/ContinualLearning/fps_<TS>/fps_summary.png
+  ```
+- **出力先**：`--out` で指定した PNG
 - **想定時間**：数秒
 
 ---

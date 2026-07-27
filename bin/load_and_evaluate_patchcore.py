@@ -3,10 +3,18 @@ import gc
 import logging
 import os
 import sys
+import time
 
 import click
 import numpy as np
 import torch
+
+try:
+    import psutil
+
+    _PSUTIL_AVAILABLE = True
+except ImportError:
+    _PSUTIL_AVAILABLE = False
 
 import patchcore.common
 import patchcore.metrics
@@ -25,18 +33,21 @@ _DATASETS = {"mvtec": ["patchcore.datasets.mvtec", "MVTecDataset"]}
 @click.option("--gpu", type=int, default=[0], multiple=True, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
 @click.option("--save_segmentation_images", is_flag=True)
+@click.option("--skip_pixel_metrics", is_flag=True)
 def main(**kwargs):
     pass
 
 
 @main.result_callback()
-def run(methods, results_path, gpu, seed, save_segmentation_images):
+def run(methods, results_path, gpu, seed, save_segmentation_images, skip_pixel_metrics):
     methods = {key: item for (key, item) in methods}
 
     os.makedirs(results_path, exist_ok=True)
 
     # 規約: 再現メタ情報と実行ログを結果フォルダに残す（R4/R5）
-    patchcore.runlog.write_meta(results_path, {"seed": seed})
+    patchcore.runlog.write_meta(
+        results_path, {"seed": seed, "skip_pixel_metrics": skip_pixel_metrics}
+    )
     _logfile = patchcore.runlog.start_tee(results_path)
     _fh = logging.StreamHandler(_logfile)
     _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
@@ -81,6 +92,7 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
                 PatchCore_list = next(patchcore_iter)
 
             aggregator = {"scores": [], "segmentations": []}
+            total_predict_time = 0.0
             for i, PatchCore in enumerate(PatchCore_list):
                 torch.cuda.empty_cache()
                 LOGGER.info(
@@ -88,11 +100,26 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
                         i + 1, len(PatchCore_list)
                     )
                 )
+                _t0 = time.time()
                 scores, segmentations, labels_gt, masks_gt = PatchCore.predict(
                     dataloaders["testing"]
                 )
+                total_predict_time += time.time() - _t0
                 aggregator["scores"].append(scores)
                 aggregator["segmentations"].append(segmentations)
+
+            num_test_images = len(dataloaders["testing"].dataset)
+            fps = (
+                num_test_images / total_predict_time
+                if total_predict_time > 0
+                else float("nan")
+            )
+            if "cuda" in device.type.lower():
+                memory_mb = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+            elif _PSUTIL_AVAILABLE:
+                memory_mb = psutil.Process(os.getpid()).memory_info().rss / (1024 ** 2)
+            else:
+                memory_mb = float("nan")
 
             scores = np.array(aggregator["scores"])
             min_scores = scores.min(axis=-1).reshape(-1, 1)
@@ -154,25 +181,35 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
 
             LOGGER.info("Computing evaluation metrics.")
             # Compute Image-level AUROC scores for all images.
-            auroc = patchcore.metrics.compute_imagewise_retrieval_metrics(
+            image_metrics = patchcore.metrics.compute_imagewise_retrieval_metrics(
                 scores, anomaly_labels
-            )["auroc"]
-
-            # Compute PRO score & PW Auroc for all images
-            pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
-                segmentations, masks_gt
             )
-            full_pixel_auroc = pixel_scores["auroc"]
+            auroc = image_metrics["auroc"]
+            instance_f1 = image_metrics["f1"]
 
-            # Compute PRO score & PW Auroc only for images with anomalies
-            sel_idxs = []
-            for i in range(len(masks_gt)):
-                if np.sum(masks_gt[i]) > 0:
-                    sel_idxs.append(i)
-            pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
-                [segmentations[i] for i in sel_idxs], [masks_gt[i] for i in sel_idxs]
-            )
-            anomaly_pixel_auroc = pixel_scores["auroc"]
+            # ピクセル指標は 1388x224x224 画素の AUROC 計算で数分かかるため、
+            # fps 計測だけが目的の場合は --skip_pixel_metrics で省略できる。
+            if skip_pixel_metrics:
+                LOGGER.info("Skipping pixel-wise metrics (--skip_pixel_metrics).")
+                full_pixel_auroc = float("nan")
+                anomaly_pixel_auroc = float("nan")
+            else:
+                # Compute PRO score & PW Auroc for all images
+                pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
+                    segmentations, masks_gt
+                )
+                full_pixel_auroc = pixel_scores["auroc"]
+
+                # Compute PRO score & PW Auroc only for images with anomalies
+                sel_idxs = []
+                for i in range(len(masks_gt)):
+                    if np.sum(masks_gt[i]) > 0:
+                        sel_idxs.append(i)
+                pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
+                    [segmentations[i] for i in sel_idxs],
+                    [masks_gt[i] for i in sel_idxs],
+                )
+                anomaly_pixel_auroc = pixel_scores["auroc"]
 
             result_collect.append(
                 {
@@ -180,6 +217,10 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
                     "instance_auroc": auroc,
                     "full_pixel_auroc": full_pixel_auroc,
                     "anomaly_pixel_auroc": anomaly_pixel_auroc,
+                    "instance_f1": instance_f1,
+                    "fps": fps,
+                    "memory_mb": memory_mb,
+                    "n_test_images": num_test_images,
                 }
             )
 
