@@ -23,8 +23,11 @@ TEACHER="${TEACHER:-results/ContinualLearning/20260526_比較検討/20260527_064
 FS_OUT="${FS_OUT:-/disk/data_area4/t-hori/bfai/student_feat}"      # F_S は大容量なので data_area4
 
 mkdir -p "$OUT"
+# --cache_normal 0 は必須：正常特徴を RAM 常駐すると 23,888×(特徴3.2MB+map0.2MB)=81.5GB
+# 必要で RAM 62GB を超え OOM Killer に殺される（2026-07-27 実際に発生）。
+# 特徴は nvme 上にあるので常駐しなくても十分速い。
 common=(--gpu "$GPU" --epochs "$EPOCHS" --batch_size 32
-        --normal_pseudo_ratio 1.0 --steps_per_epoch "$STEPS" --out "$OUT")
+        --normal_pseudo_ratio 1.0 --steps_per_epoch "$STEPS" --cache_normal 0 --out "$OUT")
 
 # ---- 1) ② feature_to_map（特徴→異常map）----
 echo "[1] ② feature_to_map 学習開始 $(date +%H:%M:%S)"
