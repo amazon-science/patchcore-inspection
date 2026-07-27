@@ -106,6 +106,61 @@ def _process(front, dataset, device, split_dir, args):
     return done, split_stats
 
 
+@torch.no_grad()
+def _process_packed(front, dataset, device, out_dir, args):
+    """packed 入力 → packed 出力（F_S を features.npy に書く）。
+
+    per-file ``.pt`` だと 10x(238,880枚) で 23万ファイル・384GB になり NFS/inode 的に
+    非現実的なため、``PackedWriter`` で memmap にストリーミング書き込みする。
+    後段学習は ``PackedTargetDataset(load_feature=True)`` がそのまま読む。
+    """
+    import numpy as np
+
+    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
+                        num_workers=args.num_workers)
+    limit = args.max_per_split or len(dataset)
+    S = int(dataset.meta.get("imagesize", args.imagesize))
+    mh, mw = dataset.meta.get("map_size", [S, S])
+
+    writer = None
+    scores_all = []
+    feat_shape = None
+    done = 0
+    for batch in loader:
+        if done >= limit:
+            break
+        f_s = front(batch["image"].to(device, non_blocking=True)).cpu()  # [B,C,H',W']
+        if writer is None:
+            feat_shape = list(f_s.shape[1:])
+            # 画像は後段(feature_to_map)では不要なので保存しない（384GBの重複回避）
+            writer = io_utils.PackedWriter(out_dir, limit, imagesize=S, map_size=(mh, mw),
+                                           save_image=False, feature_shape=feat_shape)
+        amaps = batch["teacher_map"]
+        for i in range(f_s.shape[0]):
+            if done >= limit:
+                break
+            a = amaps[i]
+            if a.dim() == 3:
+                a = a.squeeze(0)
+            writer.write(done, target=a.numpy(), score=float(batch["teacher_score"][i]),
+                         label=int(batch["label"][i]), feature=f_s[i].numpy())
+            scores_all.append(float(batch["teacher_score"][i]))
+            done += 1
+        if done % (args.batch_size * 50) < args.batch_size:
+            print(f"  [pseudo] {done}/{limit} 枚", flush=True)
+
+    arr = np.asarray(scores_all, dtype=np.float64)
+    meta = writer.close(extra_meta={"source": "precompute_student_features",
+                                    "target_space": "patchcore"}) if writer else {}
+    stats = {"count": int(done), "feature_shape": feat_shape,
+             "score_mean": float(arr.mean()) if len(arr) else None,
+             "score_std": float(arr.std()) if len(arr) else None,
+             "score_min": float(arr.min()) if len(arr) else None,
+             "score_max": float(arr.max()) if len(arr) else None}
+    print(f"  [pseudo] packed 完了: {stats}")
+    return done, stats
+
+
 def main():
     args = parse_args()
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -131,11 +186,19 @@ def main():
 
     n_pseudo = 0
     if args.pseudo_dir:
-        pseudo = io_utils.DirectImageTargetDataset(
-            args.pseudo_dir, resize=args.resize, imagesize=args.imagesize, load_feature=False,
-        )
-        n_pseudo, stats_json["pseudo"] = _process(
-            front, pseudo, device, os.path.join(run_dir, "pseudo"), args)
+        if io_utils.is_packed(args.pseudo_dir):
+            # 大規模疑似（10x=238,880枚）は per-file .pt にすると23万ファイル・384GBで
+            # 現実的でないため、packed memmap 入力 → packed memmap 出力にする。
+            pseudo = io_utils.PackedTargetDataset(
+                args.pseudo_dir, load_feature=False, in_memory=False, target_scale=1.0)
+            n_pseudo, stats_json["pseudo"] = _process_packed(
+                front, pseudo, device, os.path.join(run_dir, "pseudo"), args)
+        else:
+            pseudo = io_utils.DirectImageTargetDataset(
+                args.pseudo_dir, resize=args.resize, imagesize=args.imagesize, load_feature=False,
+            )
+            n_pseudo, stats_json["pseudo"] = _process(
+                front, pseudo, device, os.path.join(run_dir, "pseudo"), args)
         print(f"疑似 F_S 保存: {n_pseudo} 枚")
 
     # fit_score_stats の高速経路（.pt を読まない）用に stats.json を残す

@@ -160,7 +160,8 @@
     --front_checkpoint <P5_run>/checkpoints/best.ckpt \
     --targets_dir <allfeat_precompute> --pseudo_dir <pseudo_precompute>/pseudo --gpu 0
   ```
-- **出力先**：`results/distill_map/precomputed_student_feat/<name>_<YYYYMMDD_HHMMSS>/{train,pseudo}/*.pt` ＋ `meta.json` / `log.txt`
+- **packed 入力への対応**：`--pseudo_dir` が packed（`packed_meta.json` を持つ）なら、疑似側は **packed memmap 出力**（`pseudo/features.npy` に F_S）になる。10x(238,880枚)を per-file `.pt` にすると23万ファイル・384GBで非現実的なため。画像は後段(feature_to_map)で不要なので保存しない。後段は `PackedTargetDataset(load_feature=True)` がそのまま読む（正常=.pt / 疑似=packed の混在で動作する）。
+- **出力先**：`results/distill_map/precomputed_student_feat/<name>_<YYYYMMDD_HHMMSS>/`（train/ は `.pt`、pseudo/ は packed または `.pt`）＋ `meta.json` / `log.txt`
 - **後続**：`bin/train_distill_map.py <出力> --pseudo_dir <出力>/pseudo --pattern feature_to_map`（＝③-B 後段学習）。評価は `eval_distill_map.py --front_checkpoint <P5> --checkpoint <③-B後段>`。
 - **想定時間**：前段1パス（数分〜十数分、枚数依存）
 
