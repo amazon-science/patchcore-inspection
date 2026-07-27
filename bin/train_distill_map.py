@@ -119,7 +119,10 @@ def main():
     )
     train_targets_dir = os.path.join(args.targets_dir, "train")
     load_feature = args.pattern in ("feature_to_map", "image_to_feature")
-    normal_ds = io_utils.TeacherTargetDataset(base, train_targets_dir, load_feature=load_feature)
+    # feature_to_map は特徴のみを入力に取るので画像は読まない（packed の IO/CPU 節約）
+    need_image = args.pattern != "feature_to_map"
+    normal_ds = io_utils.TeacherTargetDataset(base, train_targets_dir, load_feature=load_feature,
+                                              load_image=need_image)
     stat_sources = [normal_ds]
     pseudo_ds = None
     if args.pseudo_dir:
@@ -136,7 +139,8 @@ def main():
         if io_utils.is_packed(args.pseudo_dir):
             pseudo_ds = io_utils.PackedTargetDataset(
                 args.pseudo_dir, load_feature=load_feature, in_memory=False,
-                max_count=pmax, target_scale=pscale, subset=args.pseudo_subset)
+                max_count=pmax, target_scale=pscale, subset=args.pseudo_subset,
+                load_image=need_image)
             print(f"pseudo: packed memmap を使用（{len(pseudo_ds)} 枚, pseudo_max={args.pseudo_max}, "
                   f"subset={args.pseudo_subset}）")
         else:

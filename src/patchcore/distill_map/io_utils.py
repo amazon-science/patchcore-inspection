@@ -71,10 +71,13 @@ class TeacherTargetDataset(Dataset):
     対応する ``.pt`` が存在する画像のみを対象にする（スモークの部分 precompute に対応）。
     """
 
-    def __init__(self, base_dataset, targets_split_dir: str, load_feature: bool = False):
+    def __init__(self, base_dataset, targets_split_dir: str, load_feature: bool = False,
+                 load_image: bool = True):
         self.base = base_dataset
         self.dir = targets_split_dir
         self.load_feature = load_feature
+        # feature_to_map は画像を使わないので JPEG デコードごと省く（CPU 節約）
+        self.load_image = load_image
         avail = {
             f[:-3] for f in os.listdir(targets_split_dir) if f.endswith(".pt")
         }
@@ -94,13 +97,11 @@ class TeacherTargetDataset(Dataset):
 
     def __getitem__(self, j):
         base_idx, sid = self.items[j]
-        item = self.base[base_idx]
         rec = torch.load(os.path.join(self.dir, sid + ".pt"), weights_only=False)
         amap = rec["teacher_anomaly_map"]
         if amap.dim() == 2:
             amap = amap.unsqueeze(0)  # [1,H,W]
         out = {
-            "image": item["image"],
             "teacher_map": amap.float(),
             "teacher_score": torch.tensor(
                 float(rec["teacher_anomaly_score"]), dtype=torch.float32
@@ -109,6 +110,8 @@ class TeacherTargetDataset(Dataset):
             "sample_id": sid,
             "image_path": rec.get("image_path", sid),
         }
+        if self.load_image:
+            out["image"] = self.base[base_idx]["image"]
         if self.load_feature:
             if "teacher_feature_map" not in rec:
                 raise KeyError(
@@ -376,7 +379,7 @@ class PackedTargetDataset(Dataset):
     """
 
     def __init__(self, folder, load_feature=False, in_memory=False, max_count=None,
-                 target_scale=1.0, subset="stride"):
+                 target_scale=1.0, subset="stride", load_image=True):
         self.dir = folder
         with open(os.path.join(folder, PACK_MARKER)) as f:
             self.meta = json.load(f)
@@ -387,8 +390,9 @@ class PackedTargetDataset(Dataset):
         self.targets = np.load(os.path.join(folder, "targets.npy"), mmap_mode=mmap)
         self.scores = np.load(os.path.join(folder, "scores.npy"), mmap_mode=mmap)
         self.labels = np.load(os.path.join(folder, "labels.npy"), mmap_mode=mmap)
+        # feature_to_map は画像を使わないので load_image=False で読み飛ばす（IO/CPU 節約）
         self.images = (np.load(os.path.join(folder, "images.npy"), mmap_mode=mmap)
-                       if self.meta.get("save_image") else None)
+                       if load_image and self.meta.get("save_image") else None)
         self.features = (np.load(os.path.join(folder, "features.npy"), mmap_mode=mmap)
                          if load_feature and self.meta.get("feature_shape") else None)
         total = int(self.meta["count"])
