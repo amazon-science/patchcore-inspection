@@ -1,4 +1,5 @@
 """PatchCore and PatchCore detection methods."""
+
 import logging
 import os
 import pickle
@@ -37,7 +38,10 @@ class PatchCore(torch.nn.Module):
         nn_method=patchcore.common.FaissNN(False, 4),
         **kwargs,
     ):
-        self.backbone = backbone.to(device)
+        # PatchCore uses a fixed ImageNet representation; freezing it prevents
+        # accidental gradient state from turning memory-bank fitting into training.
+        self.backbone = backbone.to(device).eval()
+        self.backbone.requires_grad_(False)
         self.layers_to_extract_from = layers_to_extract_from
         self.input_shape = input_shape
 

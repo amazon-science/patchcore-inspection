@@ -1,11 +1,17 @@
 click>= 8.0.3
 # cudatoolkit>= 10.2
 faiss-cpu
+ipykernel
+nbclient
+nbconvert
+nbformat
 #faiss-gpu
 matplotlib>= 3.5.0
 pillow>= 8.4.0
 pretrainedmodels>= 0.7.4
 torch>= 1.10.0
+timm
+PyYAML
 scikit-image>= 0.18.3
 scikit-learn>= 1.0.1
 scipy>= 1.7.1

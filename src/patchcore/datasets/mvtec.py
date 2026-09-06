@@ -46,6 +46,7 @@ class MVTecDataset(torch.utils.data.Dataset):
         imagesize=224,
         split=DatasetSplit.TRAIN,
         train_val_split=1.0,
+        image_transform=None,
         **kwargs,
     ):
         """
@@ -68,15 +69,22 @@ class MVTecDataset(torch.utils.data.Dataset):
         self.split = split
         self.classnames_to_use = [classname] if classname is not None else _CLASSNAMES
         self.train_val_split = train_val_split
+        self.image_transform = image_transform
 
         self.imgpaths_per_class, self.data_to_iterate = self.get_image_data()
 
         self.transform_img = [
             transforms.Resize(resize),
             transforms.CenterCrop(imagesize),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
         ]
+        if image_transform is not None:
+            self.transform_img.append(image_transform)
+        self.transform_img.extend(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ]
+        )
         self.transform_img = transforms.Compose(self.transform_img)
 
         self.transform_mask = [

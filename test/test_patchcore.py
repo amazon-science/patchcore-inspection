@@ -41,6 +41,7 @@ def _dummy_image_random_dataloader(number_of_examples, image_shape):
 
 
 def _standard_patchcore(image_dimension):
+    torch.manual_seed(0)
     patchcore_instance = patchcore_model.PatchCore(torch.device("cpu"))
     backbone = models.wide_resnet50_2(pretrained=False)
     backbone.name, backbone.seed = "wideresnet50", 0
@@ -56,6 +57,16 @@ def _standard_patchcore(image_dimension):
         spade_nn=2,
     )
     return patchcore_instance
+
+
+def test_patchcore_backbone_is_frozen():
+    patchcore_instance = _standard_patchcore(32)
+
+    assert not patchcore_instance.backbone.training
+    assert all(
+        not parameter.requires_grad
+        for parameter in patchcore_instance.backbone.parameters()
+    )
 
 
 def _load_patchcore_from_path(load_path):
@@ -108,7 +119,10 @@ def test_patchcore_on_dataloader():
     model.fit(training_dataloader)
     scores, masks, labels_gt, masks_gt = model.predict(training_dataloader)
 
-    assert all([score < 1e-3 for score in scores])
+    # FAISS uses float32 distance accumulation. Random, untrained eval-mode
+    # backbones can produce large embeddings whose self-distance has small
+    # cancellation error even when query and memory vectors are identical.
+    assert np.allclose(scores, 0, atol=3e-2), scores
     for mask, mask_gt in zip(masks, masks_gt):
         assert np.all(mask.shape == (image_dimension, image_dimension))
         assert np.all(mask_gt.shape == (image_dimension, image_dimension))

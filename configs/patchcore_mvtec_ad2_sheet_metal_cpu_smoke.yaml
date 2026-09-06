@@ -1,0 +1,42 @@
+experiment:
+  name: patchcore_mvtec_ad2_sheet_metal_cpu_smoke
+  seed: 42
+
+device:
+  requested: cpu
+
+dataset:
+  name: mvtec_ad_2
+  root: /mnt/e/Downloads/USTH_ICTLab/datasets/sheet_metal
+  class_name: sheet_metal
+  resize: 128
+  image_size: 128
+  max_train_samples: 10
+  max_test_samples: 10
+
+patchcore:
+  backbone: wideresnet50
+  feature_layers:
+    - layer2
+    - layer3
+  coreset_ratio: 0.01
+  pretrain_embedding_dimension: 1024
+  target_embedding_dimension: 256
+  nearest_neighbors: 1
+  patch_size: 3
+
+evaluation:
+  image_auroc: true
+  pixel_auroc: true
+  au_pro: true
+
+augmentation:
+  enabled: false
+  brightness: [1.0, 1.0]
+  contrast: [1.0, 1.0]
+  gamma: [1.0, 1.0]
+
+test_shift:
+  enabled: false
+  kind: none
+  factor: 1.0

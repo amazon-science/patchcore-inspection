@@ -1,0 +1,32 @@
+experiment:
+  name: patchcore_augmented_brightness_08
+  seed: 42
+device:
+  requested: auto
+dataset:
+  name: mvtec
+  root: ../datasets/mvtec
+  class_name: bottle
+  resize: 256
+  image_size: 224
+patchcore:
+  backbone: wideresnet50
+  feature_layers: [layer2, layer3]
+  coreset_ratio: 0.1
+  pretrain_embedding_dimension: 1024
+  target_embedding_dimension: 1024
+  nearest_neighbors: 1
+  patch_size: 3
+evaluation:
+  image_auroc: true
+  pixel_auroc: true
+  au_pro: true
+augmentation:
+  enabled: true
+  brightness: [0.8, 1.2]
+  contrast: [0.8, 1.2]
+  gamma: [0.8, 1.2]
+test_shift:
+  enabled: true
+  kind: brightness
+  factor: 0.8

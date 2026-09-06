@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import PIL
 import torch
+
+from patchcore.device import DeviceManager
 import tqdm
 
 LOGGER = logging.getLogger(__name__)
@@ -94,16 +96,13 @@ def create_storage_folder(
 
 
 def set_torch_device(gpu_ids):
-    """Returns correct torch.device.
+    """Return a compatible device for the legacy GPU-ID CLI.
 
     Args:
         gpu_ids: [list] list of gpu ids. If empty, cpu is used.
     """
-    if len(gpu_ids):
-        # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-        # os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_ids[0])
-        return torch.device("cuda:{}".format(gpu_ids[0]))
-    return torch.device("cpu")
+    requested_device = "auto" if gpu_ids else "cpu"
+    return DeviceManager().resolve(requested_device, gpu_ids)
 
 
 def fix_seeds(seed, with_torch=True, with_cuda=True):
@@ -118,7 +117,7 @@ def fix_seeds(seed, with_torch=True, with_cuda=True):
     np.random.seed(seed)
     if with_torch:
         torch.manual_seed(seed)
-    if with_cuda:
+    if with_cuda and torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
