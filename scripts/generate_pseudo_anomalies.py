@@ -60,6 +60,27 @@ def parse_args():
                    help="gray時の輝度下限 0-255")
     p.add_argument("--blob_gray_max", type=int, default=PA.DEFAULT_BLOB_CFG["gray_max"],
                    help="gray時の輝度上限 0-255")
+    # 形状バリアント（S2/S3）。既定は poly/hard＝従来挙動と完全一致。
+    p.add_argument("--blob_shape_family", default=PA.DEFAULT_BLOB_CFG["shape_family"],
+                   choices=["poly", "irregular"],
+                   help="図形の形状族。poly=凸多角形(従来) / irregular=不定形(実欠陥形状に整合)")
+    p.add_argument("--blob_aspect_min", type=float, default=PA.DEFAULT_BLOB_CFG["aspect_min"],
+                   help="irregular: 縦横比の下限（対数一様）")
+    p.add_argument("--blob_aspect_max", type=float, default=PA.DEFAULT_BLOB_CFG["aspect_max"],
+                   help="irregular: 縦横比の上限")
+    p.add_argument("--blob_rough_amp", type=float, default=PA.DEFAULT_BLOB_CFG["rough_amp"],
+                   help="irregular: 輪郭凹凸の振幅（半径比）")
+    p.add_argument("--blob_rough_kmax", type=int, default=PA.DEFAULT_BLOB_CFG["rough_kmax"],
+                   help="irregular: 輪郭ノイズの最大次数")
+    p.add_argument("--blob_scratch_ratio", type=float, default=PA.DEFAULT_BLOB_CFG["scratch_ratio"],
+                   help="irregular: 細長い擦り傷として描く割合 0-1")
+    p.add_argument("--blob_irregular_scale", type=float, default=PA.DEFAULT_BLOB_CFG["irregular_scale"],
+                   help="irregular: 半径補正（poly と実面積分布を揃える係数）")
+    p.add_argument("--blob_edge_blend", default=PA.DEFAULT_BLOB_CFG["edge_blend"],
+                   choices=["hard", "soft"],
+                   help="境界処理。hard=ベタ塗り(従来) / soft=σ∝半径のぼかし合成")
+    p.add_argument("--blob_edge_sigma_frac", type=float, default=PA.DEFAULT_BLOB_CFG["edge_sigma_frac"],
+                   help="soft: ぼかし σ＝この比×図形半径")
     p.add_argument("--shard_size", type=int, default=5000,
                    help="1シャード(サブフォルダ)あたりの枚数。大規模で単一ディレクトリ過密を回避")
     p.add_argument("--workers", type=int, default=1, help="並列プロセス数")
@@ -258,6 +279,13 @@ def main():
         "size_dist": args.blob_size_dist, "shapes": tuple(args.blob_shapes),
         "color_mode": args.blob_color_mode,
         "gray_min": args.blob_gray_min, "gray_max": args.blob_gray_max,
+        "shape_family": args.blob_shape_family,
+        "aspect_min": args.blob_aspect_min, "aspect_max": args.blob_aspect_max,
+        "rough_amp": args.blob_rough_amp, "rough_kmax": args.blob_rough_kmax,
+        "scratch_ratio": args.blob_scratch_ratio,
+        "irregular_scale": args.blob_irregular_scale,
+        "edge_blend": args.blob_edge_blend,
+        "edge_sigma_frac": args.blob_edge_sigma_frac,
     }
     types = tuple(args.types)
     source_major = args.per_image > 0

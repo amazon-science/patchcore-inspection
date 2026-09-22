@@ -599,3 +599,28 @@ PYTHONPATH=./src python3 -m pytest -v
 - **フロー**：② feature_to_map 学習→評価 → ③前段 image_to_feature → F_S precompute（F_S は大容量なので data_area4）→ ③後段 → ③連結評価 → [5b] `run_pseudoB_row3.sh`（画像→特徴map 行）
 - **出力先**：`results/distill_map/pseudoB_10x/`
 - **想定時間**：nvme 化により ② は 1epoch 数分オーダー（NFS 版の 97分/epoch から大幅短縮）
+
+### scripts/compare_pseudo_shape_stats.py — 疑似異常の「形」を実欠陥と定量比較
+
+- **目的**：疑似異常の形状バリアント（S0 poly / S2 irregular / S3 irregular+soft）が、実欠陥の形状分布へ寄ったかを**学習を回す前に**判定する。面積率 / 外接矩形充填率 / 円形度 4πA/P² / 縦横比 を欠陥ごとに測って CDF 比較する。
+- **リーク方針**：パラメータのフィット対象は `dataset/inpainting_dataset/ground_truth_train/abnormal`（train 由来・学習側に使ってよい）。`dataset/anomaly_dataset/ground_truth/abnormal`（評価データの GT）は**報告用の参照表示のみ**に使い、調整には使わない。
+- **前提**：`PYTHONPATH=./src`、venv。GPU 不要。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python scripts/compare_pseudo_shape_stats.py --n_pseudo 2000
+  ```
+- **出力先**：`results/distill_map/shape_stats/<TS>/`（`shape_stats.csv`, `shape_distributions.png`, `shape_samples.png`, `meta.json`, `log.txt`）
+- **想定時間**：約1〜2分（n_pseudo=2000）
+
+### scripts/generate_pseudo_anomalies.py の形状バリアント引数（S2/S3）
+
+- **目的**：疑似異常の**形だけ**を差し替えて対照実験する。既定は `poly`/`hard`＝従来挙動と完全一致（既存 pack の乱数列互換）。
+- **主な引数**：
+  - `--blob_shape_family irregular`：凸多角形→不定形（調和ノイズ輪郭＋異方性＋細線スクラッチ）。既定は実欠陥統計に合わせ `rough_amp=0.65 / rough_kmax=10 / aspect_max=2.2 / scratch_ratio=0.15 / irregular_scale=0.78`。
+  - `--blob_edge_blend soft`：境界を σ∝半径（`--blob_edge_sigma_frac`, 既定 0.20）でぼかして α 合成。**塗り色の分布は変えない**ので「形・境界」のみの操作になる。
+- **コマンド例（1x スクリーニング用 pack 生成）**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python scripts/generate_pseudo_anomalies.py \
+    --per_image 1 --pack --types blob --blob_shape_family irregular \
+    --workers 14 --out /tmp/t-hori/bfai/shape_1x/S2
+  ```
