@@ -668,3 +668,17 @@ PYTHONPATH=./src python3 -m pytest -v
   ```
 - **出力先**：`results/distill_map/score_alignment/<TS>/`（`score_alignment.png`, `score_alignment.csv`, `meta.json`）
 - **想定時間**：数十秒
+
+### scripts/archive_shape_experiment.py — 形状実験の成果物アーカイブ（再現性確保）
+
+- **目的**：図・疑似異常サンプル画像・指標・再現メタ（git commit / seed / 実行コマンド / 環境）を 1 か所へ集約し、README・再現コマンド・マニフェストを生成する。疑似異常の生成は seed＋commit＋引数で決定論的に再現できるため、**画像本体はサンプルのみ**保存し、完全再生成の手順を `repro/commands.md` に残す方針。
+- **書き込み範囲**：`--out` 配下のみ（入力は読み取りのみ）。保存先が空でない場合は `--force` が必要。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python scripts/archive_shape_experiment.py \
+    --out dataset/pseudo_anomaly_shape_20260922 \
+    --run_dir results/distill_map/shape_screen_1x results/distill_map/shape_10x \
+    --pseudo_root /tmp/t-hori/bfai/shape_screen_1x /tmp/t-hori/bfai/shape_10x
+  ```
+- **出力構成**：`figures/`（主要図4点＋条件別 ROC・学習曲線・異常マップパネル）／`samples/<バリアント>/`（疑似異常 PNG 200枚＋生成メタ）／`metrics/`（summary.csv ほか横断表と条件別指標）／`repro/`（env.json・run_meta・commands.md）／`README.md`／`manifest.csv`
+- **想定時間**：1〜3分（条件数・サンプル枚数による）
