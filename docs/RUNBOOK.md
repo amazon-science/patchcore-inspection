@@ -624,3 +624,33 @@ PYTHONPATH=./src python3 -m pytest -v
     --per_image 1 --pack --types blob --blob_shape_family irregular \
     --workers 14 --out /tmp/t-hori/bfai/shape_1x/S2
   ```
+
+### bin/run_shape_screen_1x.sh — 疑似異常「形状」バリアントの 1x スクリーニング
+
+- **目的**：疑似異常の *形* だけを差し替えて、B方式10x（AUROC 0.8215）と同じ後段工程で精度が動くかを 1x（23,888枚）で先に判定する。後段（教師 round_21 → PatchCore 距離マップ → ① image_to_map → 同一評価セット）は一切変えない。
+- **統制項目**（全条件で固定）：正常ソース23,888枚・per_image=1・個数1〜3・サイズ対数一様0.005〜0.13・単色グレー・seed・224² pack・epochs30 / steps_per_epoch2000 / batch32 / normal_pseudo_ratio1.0。
+- **前提**：`PYTHONPATH=./src`、venv、GPU。生成物はローカル nvme（NFS 乱読で学習が10倍以上遅くなるため）。
+  - **faiss は可視デバイスの 0 番に載る**ので、本スクリプトは B方式生成時に `CUDA_VISIBLE_DEVICES=$GPU --gpu 0` を渡している。
+- **コマンド例**：
+  ```bash
+  # S2（不定形）を GPU0 で、S3（不定形＋境界ぼかし）を GPU1 で並列実行
+  VARIANT=S2 GPU=0 WORKERS=6 SHAPE_ARGS="--blob_shape_family irregular" bash bin/run_shape_screen_1x.sh
+  VARIANT=S3 GPU=1 WORKERS=6 SHAPE_ARGS="--blob_shape_family irregular --blob_edge_blend soft" bash bin/run_shape_screen_1x.sh
+  # S0（対照・生成なし）は既存 B方式10x pack の等間隔サブセットを使う
+  VARIANT=S0 GPU=1 PSEUDO_DIR=/tmp/t-hori/bfai/shape_screen_1x/S0_B PSEUDO_MAX=23888 bash bin/run_shape_screen_1x.sh
+  ```
+- **出力先**：`results/distill_map/shape_screen_1x/`（学習 `<VARIANT>_1x_image_to_map_<TS>/`、評価 `eval_<VARIANT>_1x_<TS>/`）／疑似データは `/tmp/t-hori/bfai/shape_screen_1x/`
+- **想定時間**：1条件あたり 生成 3〜10分＋B方式教師 約60〜90分（1GPU）＋学習 約60分＋評価 数分
+
+### bin/aggregate_shape_comparison.py — 形状バリアントの比較表・図
+
+- **目的**：各 eval フォルダの AUROC / AP / F1max / map_MSE と、疑似 pack の教師スコア統計を 1 表・1 図に集約する。参照線に既存確定値（T0=0.9282, P2_inpainting926=0.8879）を引く。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python bin/aggregate_shape_comparison.py \
+    --eval S0_1x=results/distill_map/shape_screen_1x/eval_S0_1x_<TS> \
+           S2_1x=results/distill_map/shape_screen_1x/eval_S2_1x_<TS> \
+    --pack S0_1x=/tmp/t-hori/bfai/shape_screen_1x/S0_B S2_1x=/tmp/t-hori/bfai/shape_screen_1x/S2_B
+  ```
+- **出力先**：`results/distill_map/shape_comparison/<TS>/`（`comparison.csv`, `auroc_by_shape.png`, `meta.json`）
+- **想定時間**：数秒
