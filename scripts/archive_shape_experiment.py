@@ -55,6 +55,15 @@ PatchCore 蒸留（① image→map / B方式教師）で、**疑似異常画像�
 """
 
 README_TAIL = """
+## 主要な結論
+
+- **境界の描画方法（ベタ塗り hard → σ∝半径のぼかし soft）が精度を決める**：主効果 **+0.143（1x）／+0.140（10x）**。
+- **形（凸多角形 poly → 実欠陥に整合させた不定形 irregular）の寄与は小さい**：**+0.016（1x）／−0.006（10x）**。
+- 効いた理由：疑似異常の Teacher スコア中央値が 実異常 3.24 に対し hard 6.2／soft 4.1。
+  ベタ塗りは教師から見て「異常すぎる」疑似を作っており、実異常へ転移しない（`figures/04_score_alignment.png`）。
+- スケール（23,888→238,880枚）による改善はほぼ無い＝**枚数より疑似の質が支配的**。
+- 詳細は `figures/05_shape_factorial.png` と `metrics/factorial.csv`。
+
 ## 再現方法
 
 疑似異常の生成は **seed とコード commit と引数で決定論的**に再現できるため、画像本体は
@@ -81,7 +90,18 @@ def _write_readme(out, env, summary):
         f.write(body)
     # 再現コマンド（各条件の meta.json から実コマンドを抜き出して並べる）
     lines = ["# 再現コマンド\n",
-             "前提：`cd <repo>` / `export PYTHONPATH=./src` / venv 有効化。\n"]
+             "前提：`cd <repo>` / `export PYTHONPATH=./src` / venv 有効化。\n",
+             "\n## 1. 疑似異常画像の生成（seed とこの引数で決定論的に再現される）\n"]
+    sam = os.path.join(out, "samples")
+    for variant in sorted(os.listdir(sam)) if os.path.isdir(sam) else []:
+        for f, title in (("meta.json", "画像生成"), ("B_meta.json", "B方式 教師ターゲット生成")):
+            mp = os.path.join(sam, variant, f)
+            if os.path.exists(mp):
+                with open(mp) as fh:
+                    cmd = json.load(fh).get("command")
+                if cmd:
+                    lines.append(f"\n### {variant} — {title}\n```bash\n{cmd}\n```\n")
+    lines.append("\n## 2. 学習と評価（条件ごと）\n")
     for r in rows:
         cond = r["condition"]
         lines.append(f"\n## {cond}\n")
@@ -102,6 +122,9 @@ def parse_args():
     p.add_argument("--shape_stats", default="", help="compare_pseudo_shape_stats の出力（既定=最新）")
     p.add_argument("--comparison", default="", help="aggregate_shape_comparison の出力（既定=最新）")
     p.add_argument("--score_alignment", default="", help="plot_pseudo_score_alignment の出力（既定=最新）")
+    p.add_argument("--factorial", default="", help="plot_shape_factorial の出力（既定=最新）")
+    p.add_argument("--extra_pack", nargs="+", default=[],
+                   help="`バリアント名=生成 run フォルダ` の並び（別ストレージの pack のサンプルも回収）")
     p.add_argument("--pseudo_root", nargs="+", default=[],
                    help="疑似 pack の親（例 /tmp/t-hori/bfai/shape_screen_1x）。sample_png を回収する")
     p.add_argument("--n_samples", type=int, default=200, help="条件ごとに保存するサンプル PNG 枚数")
@@ -174,13 +197,15 @@ def main():
     shape_stats = args.shape_stats or _latest(os.path.join(base, "shape_stats"))
     comparison = args.comparison or _latest(os.path.join(base, "shape_comparison"))
     alignment = args.score_alignment or _latest(os.path.join(base, "score_alignment"))
+    factorial = args.factorial or _latest(os.path.join(base, "shape_factorial"))
 
     copied = []
     # --- 1) 主要図 ---
     top = [(os.path.join(shape_stats, "shape_distributions.png"), "figures/01_shape_distributions.png"),
            (os.path.join(shape_stats, "shape_samples.png"), "figures/02_shape_samples.png"),
            (os.path.join(comparison, "auroc_by_shape.png"), "figures/03_auroc_by_shape.png"),
-           (os.path.join(alignment, "score_alignment.png"), "figures/04_score_alignment.png")]
+           (os.path.join(alignment, "score_alignment.png"), "figures/04_score_alignment.png"),
+           (os.path.join(factorial or "", "shape_factorial.png"), "figures/05_shape_factorial.png")]
     for src, rel in top:
         if os.path.exists(src):
             copied.append(_copy(src, os.path.join(out, rel)))
@@ -188,7 +213,8 @@ def main():
     # --- 2) 指標（横断表）---
     for src, rel in [(os.path.join(shape_stats, "shape_stats.csv"), "metrics/shape_stats.csv"),
                      (os.path.join(comparison, "comparison.csv"), "metrics/comparison.csv"),
-                     (os.path.join(alignment, "score_alignment.csv"), "metrics/score_alignment.csv")]:
+                     (os.path.join(alignment, "score_alignment.csv"), "metrics/score_alignment.csv"),
+                     (os.path.join(factorial or "", "factorial.csv"), "metrics/factorial.csv")]:
         if os.path.exists(src):
             copied.append(_copy(src, os.path.join(out, rel)))
 
@@ -247,14 +273,27 @@ def main():
                     src = os.path.join(vdir, ts, f)
                     if os.path.exists(src):
                         copied.append(_copy(src, os.path.join(out, "samples", variant, f)))
-            bmeta = os.path.join(root, f"{variant}_B", "packed_meta.json")
-            if os.path.exists(bmeta):
-                copied.append(_copy(bmeta, os.path.join(out, "samples", variant, "B_packed_meta.json")))
+            for f, dst in (("packed_meta.json", "B_packed_meta.json"), ("meta.json", "B_meta.json")):
+                src = os.path.join(root, f"{variant}_B", f)
+                if os.path.exists(src):
+                    copied.append(_copy(src, os.path.join(out, "samples", variant, dst)))
+
+    # --- 4b) 別ストレージにある pack のサンプル（前回方式の疑似など）---
+    for kv in args.extra_pack:
+        variant, _, rdir = kv.partition("=")
+        sp = os.path.join(rdir, "sample_png")
+        if os.path.isdir(sp):
+            for f in sorted(os.listdir(sp))[:args.n_samples]:
+                copied.append(_copy(os.path.join(sp, f), os.path.join(out, "samples", variant, f)))
+        for f in ("pack_sanity.png", "meta.json"):
+            if os.path.exists(os.path.join(rdir, f)):
+                copied.append(_copy(os.path.join(rdir, f), os.path.join(out, "samples", variant, f)))
 
     # --- 5) 再現メタ ---
     env = {"git_commit": runlog.git_commit_hash(), "archived_at_jst": runlog.jst_timestamp(),
            "repo_root": REPO_ROOT, "run_dirs": args.run_dir, "pseudo_roots": args.pseudo_root,
            "shape_stats": shape_stats, "comparison": comparison, "score_alignment": alignment,
+           "factorial": factorial,
            "conditions": summary}
     with open(os.path.join(out, "repro", "env.json"), "w") as f:
         json.dump(env, f, ensure_ascii=False, indent=2)
