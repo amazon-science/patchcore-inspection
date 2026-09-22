@@ -682,3 +682,15 @@ PYTHONPATH=./src python3 -m pytest -v
   ```
 - **出力構成**：`figures/`（主要図4点＋条件別 ROC・学習曲線・異常マップパネル）／`samples/<バリアント>/`（疑似異常 PNG 200枚＋生成メタ）／`metrics/`（summary.csv ほか横断表と条件別指標）／`repro/`（env.json・run_meta・commands.md）／`README.md`／`manifest.csv`
 - **想定時間**：1〜3分（条件数・サンプル枚数による）
+
+### bin/plot_shape_factorial.py — 形 × 境界の 2×2 要因計画をスケール別に図示
+
+- **目的**：疑似異常の「形（poly/irregular）」と「境界（hard/soft）」のどちらが精度を動かすかを、複数シードの平均±標準偏差つきで 1 枚にまとめる。主効果はセル平均どうしの差の平均（シード数が不均衡でも偏らない）。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python bin/plot_shape_factorial.py --cell \
+    "1x:poly:hard=<eval1>,<eval2>" "1x:irregular:soft=<eval1>,<eval2>,<eval3>" \
+    "10x:poly:hard=<eval1>,<eval2>" ...
+  ```
+- **出力先**：`results/distill_map/shape_factorial/<TS>/`（`shape_factorial.png`, `factorial.csv`, `meta.json`）
+- **補足**：`bin/aggregate_shape_comparison.py` の `--eval ラベル=dir1,dir2,...` もシード反復に対応（平均±SD・エラーバー付き棒グラフ）。

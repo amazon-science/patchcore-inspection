@@ -24,7 +24,8 @@ matplotlib.rcParams["font.family"] = "Noto Sans CJK JP"
 def parse_args():
     p = argparse.ArgumentParser(description="形状バリアントの比較表・図")
     p.add_argument("--eval", nargs="+", required=True,
-                   help="`ラベル=eval フォルダ` の並び（例 S0_1x=results/.../eval_S0_1x_2026...）")
+                   help="`ラベル=eval フォルダ` の並び。フォルダをカンマ区切りで複数渡すと"
+                        "シード反復として平均±標準偏差を集計する")
     p.add_argument("--pack", nargs="+", default=[],
                    help="`ラベル=疑似B pack` の並び（packed_meta.json の教師スコア統計を併記）")
     p.add_argument("--ref", nargs="+", default=["T0_Teacher=0.9282", "P2_inpainting926=0.8879"],
@@ -69,8 +70,17 @@ def main():
 
     evals, packs, refs = _kv(args.eval), _kv(args.pack), _kv(args.ref)
     rows = []
-    for label, d in evals.items():
-        r = {"label": label, **_load(d), "eval_dir": d}
+    for label, dirs in evals.items():
+        ds = [x for x in dirs.split(",") if x]
+        per_seed = [_load(x) for x in ds]
+        r = {"label": label, "n_seeds": len(ds), "eval_dir": ";".join(ds)}
+        for k in per_seed[0]:
+            v = np.array([p_[k] for p_ in per_seed if k in p_], dtype=float)
+            r[k] = float(v.mean())
+            r[k + "_std"] = float(v.std(ddof=1)) if len(v) > 1 else 0.0
+            r[k + "_min"] = float(v.min())
+            r[k + "_max"] = float(v.max())
+        d = ds[0]
         pk = packs.get(label)
         if pk:
             with open(os.path.join(pk, "packed_meta.json")) as f:
@@ -79,33 +89,40 @@ def main():
                       "pseudo_count": pm.get("count")})
         rows.append(r)
 
-    cols = ["label", "auroc", "ap", "f1max", "map_mse", "score_spearman",
-            "pseudo_score_mean", "pseudo_score_max", "pseudo_count", "fps", "model_size_mb", "eval_dir"]
+    cols = ["label", "n_seeds", "auroc", "auroc_std", "auroc_min", "auroc_max", "ap", "f1max",
+            "map_mse", "score_spearman", "pseudo_score_mean", "pseudo_score_max", "pseudo_count",
+            "fps", "model_size_mb", "eval_dir"]
     csv_path = os.path.join(run_dir, "comparison.csv")
     with open(csv_path, "w") as f:
         f.write(",".join(cols) + "\n")
         for r in rows:
             f.write(",".join(str(r.get(c, "")) for c in cols) + "\n")
     print(f"比較表: {csv_path}")
-    print(f"{'条件':22s}{'AUROC':>9s}{'AP':>8s}{'F1max':>8s}{'map_MSE':>11s}{'疑似score平均':>14s}")
+    print(f"{'条件':24s}{'seed':>5s}{'AUROC(平均±SD)':>18s}{'AP':>8s}{'F1max':>8s}{'疑似score':>10s}")
     for r in rows:
-        print(f"{r['label']:22s}{r['auroc']:9.4f}{r['ap']:8.4f}{r['f1max']:8.4f}"
-              f"{r.get('map_mse', float('nan')):11.2e}"
-              f"{(r.get('pseudo_score_mean') or float('nan')):14.3f}")
+        print(f"{r['label']:24s}{r['n_seeds']:5d}"
+              f"{r['auroc']:11.4f}±{r['auroc_std']:.4f}{r['ap']:8.4f}{r['f1max']:8.4f}"
+              f"{(r.get('pseudo_score_mean') or float('nan')):10.3f}")
 
     # --- 図：AUROC の横並び（参照線つき）---
     fig, ax = plt.subplots(figsize=(1.6 * len(rows) + 4, 4.6))
     labels = [r["label"] for r in rows]
     vals = [r["auroc"] for r in rows]
-    bars = ax.bar(labels, vals, color="#4C72B0", width=0.55)
-    for b, v in zip(bars, vals):
-        ax.text(b.get_x() + b.get_width() / 2, v + 0.008, f"{v:.4f}", ha="center", fontsize=10)
+    errs = [r["auroc_std"] for r in rows]
+    bars = ax.bar(labels, vals, yerr=errs, capsize=4, color="#4C72B0", width=0.55,
+                  error_kw={"ecolor": "#333333", "lw": 1.2})
+    for b, r in zip(bars, rows):
+        lab = f"{r['auroc']:.4f}" + (f"\n±{r['auroc_std']:.4f} (n={r['n_seeds']})"
+                                     if r["n_seeds"] > 1 else "")
+        ax.text(b.get_x() + b.get_width() / 2, r["auroc"] + r["auroc_std"] + 0.012, lab,
+                ha="center", fontsize=8)
     styles = ["--", ":", "-."]
     for i, (rl, rv) in enumerate(refs.items()):
         ax.axhline(float(rv), ls=styles[i % len(styles)], color="crimson", lw=1.4,
                    label=f"{rl} = {float(rv):.4f}")
     ax.set_ylabel("Instance AUROC")
     ax.set_xlabel("疑似異常の形状バリアント")
+    plt.setp(ax.get_xticklabels(), rotation=20, ha="right", fontsize=9)
     ax.set_ylim(0.4, 1.0)
     ax.grid(axis="y", alpha=0.3)
     ax.legend(fontsize=9, loc="lower right")
