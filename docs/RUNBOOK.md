@@ -654,3 +654,17 @@ PYTHONPATH=./src python3 -m pytest -v
   ```
 - **出力先**：`results/distill_map/shape_comparison/<TS>/`（`comparison.csv`, `auroc_by_shape.png`, `meta.json`）
 - **想定時間**：数秒
+
+### bin/plot_pseudo_score_alignment.py — 疑似異常の「難易度」を実異常と突き合わせる
+
+- **目的**：疑似異常が Teacher(PatchCore) から見てどれくらい異常かを、実 test 正常／実 test 異常と重ねて可視化する。疑似の難易度が実異常帯に揃っているほど Student が実異常へ転移する、という仮説を学習結果と独立に検証する。
+- **前提**：`PYTHONPATH=./src`。GPU 不要。疑似 pack は B方式（`target_space=patchcore`）の `scores.npy`/`done.npy` を読む。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python bin/plot_pseudo_score_alignment.py \
+    --scores_csv results/distill_map/shape_screen_1x/eval_S3_1x_<TS>/predictions/scores.csv \
+    --pack "S0 poly+hard=/tmp/t-hori/bfai/shape_screen_1x/S0_B" \
+           "S3 irregular+soft=/tmp/t-hori/bfai/shape_screen_1x/S3_B"
+  ```
+- **出力先**：`results/distill_map/score_alignment/<TS>/`（`score_alignment.png`, `score_alignment.csv`, `meta.json`）
+- **想定時間**：数十秒
