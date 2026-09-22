@@ -40,15 +40,16 @@ PatchCore 蒸留（① image→map / B方式教師）で、**疑似異常画像�
 | `figures/02_shape_samples.png` | 形状バリアントの見た目比較 |
 | `figures/03_auroc_by_shape.png` | 条件別 AUROC（参照線：教師・inpainting926・前回10x） |
 | `figures/04_score_alignment.png` | 疑似異常の教師スコア分布 vs 実異常（効いた理由） |
+| `figures/05_shape_factorial.png` | 形 × 境界の 2×2 要因計画（スケール別・複数シード平均±SD） |
 | `figures/conditions/<条件>/` | ROC・学習曲線・正常過学習検知・異常マップパネル |
 | `samples/<バリアント>/` | 疑似異常のサンプル PNG・生成メタ・pack サニティ図 |
-| `metrics/` | 横断表（summary.csv / comparison.csv / shape_stats.csv / score_alignment.csv）と条件別指標 |
+| `metrics/` | 横断表（summary.csv / comparison.csv / factorial.csv / shape_stats.csv / score_alignment.csv）と条件別指標 |
 | `repro/env.json` | git commit・入力パス・条件一覧 |
 | `repro/run_meta/<条件>/` | 学習・評価の meta.json（実行コマンド全文・seed・環境） |
 | `repro/commands.md` | 生成→教師ターゲット→学習→評価の再現コマンド |
 | `manifest.csv` | 保存ファイル一覧（サイズ・ハッシュ） |
 
-## 結果
+## 結果（実行単位。条件ごとの平均±SD は `metrics/factorial.csv` を参照）
 
 | 条件 | AUROC | AP | F1max |
 |------|-------|----|----|
