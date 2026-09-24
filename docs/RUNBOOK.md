@@ -556,7 +556,7 @@ PYTHONPATH=./src python3 -m pytest -v
 ### bin/eval_front_with_bank.py — ③前段 F_S を Teacher メモリバンクに通して評価
 
 - **目的**：定量評価表の「**画像→特徴map**」行を埋める。Student が異常マップを出さない行なので、後段は Teacher の faiss メモリバンクをそのまま使う（画像 →[前段 ResNet18-FPN]→ F_S →[bank NN]→ 異常マップ/スコア）。議事録 20260707 で先生Bが挙げた「ResNet50 でバンクを作り 18 で見比べる一番素直な構成」に対応し、PatchCore の骨子を保ったまま前段だけ軽量化した精度と、「バンク側の計算量が支配的で速くならない」を定量化する。
-- **出力指標**：特徴忠実度 feat_MSE/feat_MAE（F_S vs F_T）／Instance AUROC・AP・F1max（bank 推論）／end-to-end 推論時間（前段＋NN）とメモリ（モデル＋bank）。
+- **出力指標**：特徴忠実度 feat_MSE/feat_MAE（F_S vs F_T）／**異常map忠実度 map_MSE/map_MAE**（bank 経由マップ vs 教師マップ、正規化は前段 checkpoint 内蔵の統計＝他行と同一空間）／Instance AUROC・AP・F1max（bank 推論）／end-to-end 推論時間（前段＋NN）とメモリ（モデル＋bank）。
 - **前提**：`--targets_dir` の `test/` に `teacher_feature_map` があること（precompute を `--save_feature` で作成）。
   - **faiss の GPU は `src/patchcore/common.py` で dev0 固定**のため、GPU1 で回すには `CUDA_VISIBLE_DEVICES=1` を付けて `--gpu 0` を渡す（`--gpu 1` だけでは faiss が GPU0 を掴んで OOM する）。
   - CPU faiss（`--no_faiss_on_gpu`）は 8枚/3分と非常に遅く、1,388枚で 8時間超。GPU 必須。

@@ -64,6 +64,13 @@ def parse_args():
     return p.parse_args()
 
 
+def _load_normalizer(checkpoint):
+    """前段 checkpoint に保存された正規化器（他行の map_MSE と同じ空間に揃えるため）。"""
+    ckpt = torch.load(checkpoint, map_location="cpu")
+    n = ckpt.get("normalizer")
+    return io_utils.TargetNormalizer(n["mode"], n["stats"]) if n else None
+
+
 def _load_front(checkpoint, device):
     ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
     if ckpt.get("pattern") != "image_to_feature":
@@ -131,7 +138,10 @@ def main():
                         num_workers=args.num_workers)
     print(f"test: {len(ds)} 枚")
 
+    normalizer = _load_normalizer(args.front_checkpoint)
+    print(f"正規化: {getattr(normalizer, 'mode', None)}（前段 checkpoint 由来。他行の map_MSE と同一空間）")
     feat_se = feat_ae = feat_n = 0.0
+    map_se_sum = map_ae_sum = px_count = 0.0
     s_student, s_teacher, labels = [], [], []
     t_front = t_bank = 0.0
     n_img = 0
@@ -149,8 +159,17 @@ def main():
         feat_n += d.numel()
 
         t0 = time.time()
-        scores, _ = _bank_predict(pc, f_s)                  # メモリバンク NN 探索
+        scores, maps = _bank_predict(pc, f_s)               # メモリバンク NN 探索
         t_bank += time.time() - t0
+
+        # 異常マップ忠実度：bank 経由マップ vs Teacher マップ（正規化後）
+        if normalizer is not None and "teacher_map" in batch:
+            a_t = normalizer.apply(batch["teacher_map"].float())      # [B,1,H,W]
+            a_s = normalizer.apply(torch.from_numpy(np.stack(maps)).float().unsqueeze(1))
+            d = (a_s - a_t)
+            map_se_sum += float((d ** 2).sum())
+            map_ae_sum += float(d.abs().sum())
+            px_count += d.numel()
 
         s_student.extend([float(v) for v in scores])
         s_teacher.extend([float(v) for v in batch["teacher_score"]])
@@ -163,6 +182,8 @@ def main():
     st = np.asarray(s_teacher, dtype=np.float64)
     metrics = {
         "feature_fidelity": {"feat_mse": feat_se / feat_n, "feat_mae": feat_ae / feat_n},
+        "map_fidelity": ({"map_mse": map_se_sum / px_count, "map_mae": map_ae_sum / px_count}
+                         if px_count else None),
         "student_via_bank": {
             "auroc": float(roc_auc_score(y, ss)),
             "average_precision": float(average_precision_score(y, ss)),
