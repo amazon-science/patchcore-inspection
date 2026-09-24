@@ -708,3 +708,15 @@ PYTHONPATH=./src python3 -m pytest -v
   ```
 - **出力先**：`results/distill_map/eval_table/<TS>/<name>.png`
 - **想定時間**：数秒
+
+### bin/run_stage3_soft10x.sh — 疑似「不定形＋境界ぼかし」10x の ②③ 残り工程
+
+- **目的**：② feature_to_map と ③前段 image_to_feature の学習完了を待って、②評価 → **F_T を data_area4 へ退避（nvme 確保）** → F_S precompute → ③後段 → ③連結評価 → 画像→特徴map 行（bank 評価）までを通しで実行する。
+- **退避に `mv` を使う理由**：移動と同時に nvme が空き、F_T（383.6GB・GPU50分）も保全できる。`rm -r*` はプロジェクトの deny 対象なので使わない。
+- **容量**：F_T 383.6GB と F_S 420GB は同時に nvme へ置けないため、この順序が必須。
+- **コマンド例**：
+  ```bash
+  nohup bash bin/run_stage3_soft10x.sh > results/distill_map/shape_10x_23/stage3.log 2>&1 &
+  ```
+- **出力先**：`results/distill_map/shape_10x_23/`（eval_P2_soft10x / eval_P3_twostage_soft10x / eval_front_bank_soft10x）
+- **想定時間**：②評価5分＋F_T退避55分＋F_S 21分＋③後段1.1h＋評価10分 ≒ 約2.5h（学習待ちを除く）

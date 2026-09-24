@@ -210,7 +210,9 @@ def main():
            (os.path.join(comparison, "auroc_by_shape.png"), "figures/03_auroc_by_shape.png"),
            (os.path.join(alignment, "score_alignment.png"), "figures/04_score_alignment.png"),
            (os.path.join(factorial or "", "shape_factorial.png"), "figures/05_shape_factorial.png"),
-           (os.path.join(evaltbl or "", "eval_table_shape.png"), "figures/06_eval_table.png")]
+           (next((q for q in (os.path.join(evaltbl or "", n)
+                              for n in ("eval_table_full.png", "eval_table_shape.png"))
+                   if os.path.exists(q)), ""), "figures/06_eval_table.png")]
     for src, rel in top:
         if os.path.exists(src):
             copied.append(_copy(src, os.path.join(out, rel)))
