@@ -312,10 +312,17 @@ def main():
             f.write(f"{r['condition']},{r.get('auroc','')},{r.get('ap','')},{r.get('f1max','')},"
                     f"{r.get('teacher_auroc','')},{r['eval_dir']}\n")
 
+    # マニフェストは out 配下を実際に走査する（--force の再実行で過去分が落ちないように）
     man = os.path.join(out, "manifest.csv")
+    allfiles = []
+    for root_, _, files in os.walk(out):
+        for fn in files:
+            q = os.path.join(root_, fn)
+            if os.path.relpath(q, out) not in ("manifest.csv", "log.txt"):
+                allfiles.append(q)
     with open(man, "w") as f:
         f.write("path,bytes,sha256_head64mb\n")
-        for p in sorted(copied):
+        for p in sorted(allfiles):
             rel = os.path.relpath(p, out)
             f.write(f"{rel},{os.path.getsize(p)},{_sha256(p)}\n")
 
