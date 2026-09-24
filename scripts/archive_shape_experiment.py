@@ -41,6 +41,7 @@ PatchCore 蒸留（① image→map / B方式教師）で、**疑似異常画像�
 | `figures/03_auroc_by_shape.png` | 条件別 AUROC（参照線：教師・inpainting926・前回10x） |
 | `figures/04_score_alignment.png` | 疑似異常の教師スコア分布 vs 実異常（効いた理由） |
 | `figures/05_shape_factorial.png` | 形 × 境界の 2×2 要因計画（スケール別・複数シード平均±SD） |
+| `figures/06_eval_table.png` | 定量評価表（入出力 × 疑似異常データ、スライド体裁） |
 | `figures/conditions/<条件>/` | ROC・学習曲線・正常過学習検知・異常マップパネル |
 | `samples/<バリアント>/` | 疑似異常のサンプル PNG・生成メタ・pack サニティ図 |
 | `metrics/` | 横断表（summary.csv / comparison.csv / factorial.csv / shape_stats.csv / score_alignment.csv）と条件別指標 |
@@ -124,6 +125,7 @@ def parse_args():
     p.add_argument("--comparison", default="", help="aggregate_shape_comparison の出力（既定=最新）")
     p.add_argument("--score_alignment", default="", help="plot_pseudo_score_alignment の出力（既定=最新）")
     p.add_argument("--factorial", default="", help="plot_shape_factorial の出力（既定=最新）")
+    p.add_argument("--eval_table", default="", help="render_eval_table の出力（既定=最新）")
     p.add_argument("--extra_pack", nargs="+", default=[],
                    help="`バリアント名=生成 run フォルダ` の並び（別ストレージの pack のサンプルも回収）")
     p.add_argument("--pseudo_root", nargs="+", default=[],
@@ -199,6 +201,7 @@ def main():
     comparison = args.comparison or _latest(os.path.join(base, "shape_comparison"))
     alignment = args.score_alignment or _latest(os.path.join(base, "score_alignment"))
     factorial = args.factorial or _latest(os.path.join(base, "shape_factorial"))
+    evaltbl = args.eval_table or _latest(os.path.join(base, "eval_table"))
 
     copied = []
     # --- 1) 主要図 ---
@@ -206,7 +209,8 @@ def main():
            (os.path.join(shape_stats, "shape_samples.png"), "figures/02_shape_samples.png"),
            (os.path.join(comparison, "auroc_by_shape.png"), "figures/03_auroc_by_shape.png"),
            (os.path.join(alignment, "score_alignment.png"), "figures/04_score_alignment.png"),
-           (os.path.join(factorial or "", "shape_factorial.png"), "figures/05_shape_factorial.png")]
+           (os.path.join(factorial or "", "shape_factorial.png"), "figures/05_shape_factorial.png"),
+           (os.path.join(evaltbl or "", "eval_table_shape.png"), "figures/06_eval_table.png")]
     for src, rel in top:
         if os.path.exists(src):
             copied.append(_copy(src, os.path.join(out, rel)))
@@ -215,7 +219,8 @@ def main():
     for src, rel in [(os.path.join(shape_stats, "shape_stats.csv"), "metrics/shape_stats.csv"),
                      (os.path.join(comparison, "comparison.csv"), "metrics/comparison.csv"),
                      (os.path.join(alignment, "score_alignment.csv"), "metrics/score_alignment.csv"),
-                     (os.path.join(factorial or "", "factorial.csv"), "metrics/factorial.csv")]:
+                     (os.path.join(factorial or "", "factorial.csv"), "metrics/factorial.csv"),
+                     (os.path.join(evaltbl or "", "eval_table.csv"), "metrics/eval_table.csv")]:
         if os.path.exists(src):
             copied.append(_copy(src, os.path.join(out, rel)))
 

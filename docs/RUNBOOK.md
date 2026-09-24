@@ -694,3 +694,17 @@ PYTHONPATH=./src python3 -m pytest -v
   ```
 - **出力先**：`results/distill_map/shape_factorial/<TS>/`（`shape_factorial.png`, `factorial.csv`, `meta.json`）
 - **補足**：`bin/aggregate_shape_comparison.py` の `--eval ラベル=dir1,dir2,...` もシード反復に対応（平均±SD・エラーバー付き棒グラフ）。
+
+### bin/render_eval_table.py — 定量評価表（入出力 × 疑似異常データ）をスライド体裁で描画
+
+- **目的**：議事録スライド「評価結果③」と同じ列構成（特徴map評価／異常map評価／異常スコア評価／パフォーマンス）の表を PNG で作る。該当しないセルは CSV に `-` と書くとグレーで塗られる。
+- **入力 CSV の列**：`io,pseudo,feat_mse,feat_mae,map_mse,map_mae,auroc,ap,f1max,ms,mb,highlight,bold`
+  - `highlight`：1=水色（参照行）/ 2=橙（強調行）、`bold`：太字にする列名を `|` 区切りで指定、改行は `\n`。
+- **コマンド例**：
+  ```bash
+  PYTHONPATH=./src .venv/bin/python bin/render_eval_table.py --csv <table>.csv \
+    --title "評価結果：疑似異常の生成方法による異常検知精度の違い" \
+    --subtitle "後段は前回と同一。疑似異常画像の生成方法だけを変更。" --note "..." --name eval_table_shape
+  ```
+- **出力先**：`results/distill_map/eval_table/<TS>/<name>.png`
+- **想定時間**：数秒
