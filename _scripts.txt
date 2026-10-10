@@ -1,0 +1,94 @@
+# 7/20 実行コマンド
+① 現在の50xを停止
+cd /home.auto/home3/t-hori/2025/develop/patchcore-inspection
+pkill -f run_scale_train_A
+pkill -f "train_distill_map.py.*pseudo_scale_A"
+pgrep -af "run_scale_train_A|train_distill_map"   # 何も出なければOK
+
+② ローカルへ10倍データを生成（約5分）
+mkdir -p /tmp/t-hori/bfai
+nohup env PYTHONPATH=./src .venv/bin/python scripts/generate_pseudo_anomalies.py \
+  --source_dir dataset/anomaly_dataset/train/good \
+  --per_image 10 --pack --mask_blur_sigma 2.0 --sample_png 500 \
+  --seed 0 --types blob --workers 14 \
+  --out /tmp/t-hori/bfai/data_augmentation \
+  > /tmp/genA2.log 2>&1 &
+tail -f /tmp/genA2.log
+
+- 新設定が既定：単色グレー・size 0.005〜0.13（対数一様）・個数1〜3
+- 完了後、出力先の <TS> を控えてください
+
+③ 10倍まで学習＋評価（約1時間）
+cd /home.auto/home3/t-hori/2025/develop/patchcore-inspection
+nohup bash bin/run_scale_train_A.sh \
+  /tmp/t-hori/bfai/data_augmentation/20260721_022008/pseudo \
+  30 2000 "5 10" \
+  > results/distill_map/scaleA2_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+
+進捗確認（別行で実行してください）：
+tail -f $(ls -t results/distill_map/scaleA2_*.log | head -1)
+
+7/26
+# まず共通変数を定義してください（コピペ用）:
+
+cd /home.auto/home3/t-hori/2025/develop/patchcore-inspection
+source .venv/bin/activate 2>/dev/null; export PYTHONPATH=./src
+PY=.venv/bin/python
+TNORM=results/distill_map/precomputed/20260622_222843_all           # ①用 正常/評価(特徴なし)
+TFEAT=results/distill_map/precomputed_allfeat/20260623_042006       # ②③用 正常/評価(特徴あり)
+PB=/disk/data_area4/t-hori/bfai/precomputed_pseudoB_feat_10x_20260724_234238  # 疑似B(10x)
+OUT=results/distill_map/pseudoB_10x
+GPU=1
+# ①（画像→異常map）★まず最短でAUC確認
+
+# 学習
+$PY bin/train_distill_map.py "$TNORM" \
+  --pseudo_dir "$PB" --pattern image_to_map --name P1B_image_to_map \
+  --gpu $GPU --epochs 30 --batch_size 32 \
+  --normal_pseudo_ratio 1.0 --steps_per_epoch 2000 --out "$OUT"
+
+# 評価（best.ckpt を自動取得）
+R=$(ls -td "$OUT"/P1B_image_to_map_*/ | head -1)
+$PY bin/eval_distill_map.py "$TNORM" \
+  --checkpoint "${R}checkpoints/best.ckpt" \
+  --name eval_P1B_image_to_map --gpu $GPU --out "$OUT"
+# → eval出力の summary.csv に instance_auroc / AP / F1max。A方式10x=0.577 と比較してください。
+
+# ②（特徴→異常map）
+
+$PY bin/train_distill_map.py "$TFEAT" \
+  --pseudo_dir "$PB" --pattern feature_to_map --name P2B_feature_to_map \
+  --gpu $GPU --epochs 30 --batch_size 32 \
+  --normal_pseudo_ratio 1.0 --steps_per_epoch 2000 --out "$OUT"
+
+R=$(ls -td "$OUT"/P2B_feature_to_map_*/ | head -1)
+$PY bin/eval_distill_map.py "$TFEAT" \
+  --checkpoint "${R}checkpoints/best.ckpt" \
+  --name eval_P2B_feature_to_map --gpu $GPU --out "$OUT"
+# ③（画像→特徴→異常map）＝3ステップ（前段→F_S→後段）
+
+# 3-1) 前段: 画像→特徴F_T（この学習ログの val feat MSE が「特徴map評価」列）
+$PY bin/train_distill_map.py "$TFEAT" \
+  --pseudo_dir "$PB" --pattern image_to_feature --name P3B_front \
+  --gpu $GPU --epochs 30 --batch_size 32 \
+  --normal_pseudo_ratio 1.0 --steps_per_epoch 2000 --out "$OUT"
+FRONT=$(ls -td "$OUT"/P3B_front_*/ | head -1)checkpoints/best.ckpt
+
+# 3-2) 前段出力F_Sを一括計算（★別途~384GB。大容量なので data_area4 へ）
+$PY bin/precompute_student_features.py \
+  --front_checkpoint "$FRONT" --targets_dir "$TFEAT" --pseudo_dir "$PB" \
+  --gpu $GPU --batch_size 64 --num_workers 8 --name P3B_FS \
+  --out /disk/data_area4/t-hori/bfai/student_feat
+FS=$(ls -td /disk/data_area4/t-hori/bfai/student_feat/P3B_FS_*/ | head -1)
+
+# 3-3) 後段: F_S→異常map を再学習（③B）
+$PY bin/train_distill_map.py "$FS" \
+  --pseudo_dir "${FS}pseudo" --pattern feature_to_map --name P3B_back \
+  --gpu $GPU --epochs 30 --patience 5 --batch_size 32 \
+  --normal_pseudo_ratio 1.0 --steps_per_epoch 2000 --out "$OUT"
+BACK=$(ls -td "$OUT"/P3B_back_*/ | head -1)checkpoints/best.ckpt
+
+# 3-4) 連結評価（前段+後段）
+$PY bin/eval_distill_map.py "$TFEAT" \
+  --checkpoint "$BACK" --front_checkpoint "$FRONT" \
+  --name eval_P3B_twostage --gpu $GPU --num_vis 8 --out "$OUT"
